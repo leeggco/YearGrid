@@ -7,6 +7,7 @@ import type { DayState, YearDay } from '@/hooks/useYearProgress';
 
 type Props = {
   day: YearDay;
+  todayElapsedRatio?: number;
   onHover: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
   onMove: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
   onLeave: () => void;
@@ -15,17 +16,27 @@ type Props = {
 function cellBase(state: DayState) {
   switch (state) {
     case 'past':
-      return 'bg-zinc-800/60 opacity-80';
+      return 'bg-zinc-200/55';
     case 'today':
-      return 'bg-amber-500';
+      return 'bg-cyan-500';
     case 'future':
-      return 'border border-zinc-800/80 bg-transparent';
+      return 'border border-zinc-200/60 bg-white/15';
   }
 }
 
-export default function DayCell({ day, onHover, onMove, onLeave }: Props) {
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export default function DayCell({
+  day,
+  todayElapsedRatio,
+  onHover,
+  onMove,
+  onLeave
+}: Props) {
   const baseClasses =
-    'relative aspect-square w-full rounded-[2px] transition-colors';
+    'relative aspect-square w-full cursor-pointer rounded-[2px] transition-[transform,filter,background-color,border-color] duration-150 ease-out will-change-transform hover:z-10 hover:scale-[1.12] hover:brightness-105';
 
   if (day.state === 'today') {
     return (
@@ -34,11 +45,11 @@ export default function DayCell({ day, onHover, onMove, onLeave }: Props) {
         aria-label={day.label}
         className={`${baseClasses} ${cellBase(day.state)}`}
         animate={{
-          opacity: [0.85, 1, 0.85],
+          opacity: [0.92, 1, 0.92],
           boxShadow: [
-            '0 0 0px rgba(245, 158, 11, 0.0)',
-            '0 0 18px rgba(245, 158, 11, 0.55)',
-            '0 0 0px rgba(245, 158, 11, 0.0)'
+            '0 0 0px rgba(6, 182, 212, 0.0)',
+            '0 0 26px rgba(6, 182, 212, 0.35)',
+            '0 0 0px rgba(6, 182, 212, 0.0)'
           ]
         }}
         transition={{
@@ -64,4 +75,3 @@ export default function DayCell({ day, onHover, onMove, onLeave }: Props) {
     />
   );
 }
-

@@ -2,11 +2,10 @@ import YearGrid from '@/components/YearGrid';
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen px-6 py-10">
-      <div className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-5xl items-center">
+    <main className="h-screen w-screen px-4 py-4 md:px-8 md:py-8">
+      <div className="flex h-full w-full">
         <YearGrid />
       </div>
     </main>
   );
 }
-

@@ -3,6 +3,7 @@
 import {
   differenceInSeconds,
   eachDayOfInterval,
+  endOfDay,
   endOfYear,
   format,
   getDayOfYear,
@@ -45,6 +46,23 @@ export function useYearProgress() {
   const yearStart = useMemo(() => startOfYear(now), [now]);
   const yearEnd = useMemo(() => endOfYear(now), [now]);
 
+  const todayStart = useMemo(() => startOfDay(now), [now]);
+  const todayEnd = useMemo(() => endOfDay(now), [now]);
+  const todayTotalSeconds = useMemo(
+    () => differenceInSeconds(todayEnd, todayStart) + 1,
+    [todayEnd, todayStart]
+  );
+  const todayRemainingSeconds = useMemo(
+    () => Math.max(0, differenceInSeconds(todayEnd, now)),
+    [now, todayEnd]
+  );
+  const todayElapsedRatio = useMemo(() => {
+    if (todayTotalSeconds <= 0) return 1;
+    const elapsed = todayTotalSeconds - todayRemainingSeconds;
+    const ratio = elapsed / todayTotalSeconds;
+    return Math.min(1, Math.max(0, ratio));
+  }, [todayRemainingSeconds, todayTotalSeconds]);
+
   const remainingSeconds = useMemo(
     () => Math.max(0, differenceInSeconds(yearEnd, now)),
     [now, yearEnd]
@@ -64,7 +82,6 @@ export function useYearProgress() {
   }, [now, yearEnd, yearStart]);
 
   const days = useMemo(() => {
-    const todayStart = startOfDay(now);
     const totalDays = getDayOfYear(yearEnd);
 
     const allDates = eachDayOfInterval({ start: yearStart, end: yearEnd });
@@ -78,11 +95,11 @@ export function useYearProgress() {
           : 'future';
 
       const daysLeft = Math.max(0, totalDays - dayOfYear);
-      const label = `${format(date, 'MMM d, yyyy')} · Day ${dayOfYear}`;
+      const label = `${format(date, 'yyyy年MM月dd日')} · 第${dayOfYear}天`;
 
       return { date, dayOfYear, state, daysLeft, label } satisfies YearDay;
     });
-  }, [now, yearEnd, yearStart]);
+  }, [todayStart, yearEnd, yearStart]);
 
   return {
     now,
@@ -90,6 +107,8 @@ export function useYearProgress() {
     yearEnd,
     percent,
     remaining,
+    todayRemainingSeconds,
+    todayElapsedRatio,
     days
   };
 }
