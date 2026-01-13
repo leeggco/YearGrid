@@ -5,10 +5,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Download,
   Filter,
   Plus,
   Settings2,
   Trash2,
+  Upload,
   X
 } from 'lucide-react';
 import type { FocusEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
@@ -62,6 +64,119 @@ function makeUniqueRangeName(desired: string, ranges: SavedRange[]) {
   let i = 2;
   while (taken.has(`${base}-${i}`)) i += 1;
   return `${base}-${i}`;
+}
+
+function safeParseJSON(raw: string | null): unknown | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isBodyState(value: unknown): value is BodyState {
+  return value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5;
+}
+
+function isISODateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  try {
+    return format(parseISO(value), 'yyyy-MM-dd') === value;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeEntries(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const next: Record<string, Entry> = {};
+  for (const [isoDate, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!isISODateKey(isoDate)) continue;
+    if (!entry || typeof entry !== 'object') continue;
+    const state = (entry as { state?: unknown }).state;
+    const note = (entry as { note?: unknown }).note;
+    if (!isBodyState(state)) continue;
+    const safeNote = typeof note === 'string' ? note.slice(0, 50) : '';
+    if (state === 0 && safeNote.trim() === '') continue;
+    next[isoDate] = { state, note: safeNote };
+  }
+  return next;
+}
+
+function normalizeRanges(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const cleaned: SavedRange[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const id = (item as { id?: unknown }).id;
+    const name = (item as { name?: unknown }).name;
+    const startISO = (item as { startISO?: unknown }).startISO;
+    const endISO = (item as { endISO?: unknown }).endISO;
+    if (typeof id !== 'string' || typeof startISO !== 'string' || typeof endISO !== 'string') continue;
+    const safeName = typeof name === 'string' ? name.trim() : '';
+    try {
+      const start = startOfDay(parseISO(startISO));
+      const end = startOfDay(parseISO(endISO));
+      if (isAfter(start, end)) continue;
+    } catch {
+      continue;
+    }
+    cleaned.push({
+      id,
+      name: safeName || '区间',
+      startISO,
+      endISO
+    });
+  }
+  if (cleaned.length === 0) return [];
+  const usedIds = new Set<string>();
+  const usedNames = new Set<string>();
+  const result: SavedRange[] = [];
+  for (const r of cleaned) {
+    const baseId = r.id.trim() || `range_${Date.now()}`;
+    let nextId = baseId;
+    while (usedIds.has(nextId)) nextId = `${baseId}_${Math.floor(Math.random() * 100000)}`;
+    usedIds.add(nextId);
+    const baseName = r.name.trim() || '区间';
+    let nextName = baseName;
+    if (usedNames.has(nextName)) {
+      let i = 2;
+      while (usedNames.has(`${baseName}-${i}`)) i += 1;
+      nextName = `${baseName}-${i}`;
+    }
+    usedNames.add(nextName);
+    result.push({ ...r, id: nextId, name: nextName });
+  }
+  return result;
+}
+
+function normalizeViewPref(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const mode = (value as { mode?: unknown }).mode;
+  const anchorISO = (value as { anchorISO?: unknown }).anchorISO;
+  const customStartISO = (value as { customStartISO?: unknown }).customStartISO;
+  const customEndISO = (value as { customEndISO?: unknown }).customEndISO;
+  const activeRangeId = (value as { activeRangeId?: unknown }).activeRangeId;
+  const safeMode: ViewMode | null =
+    mode === 'year' || mode === 'month' || mode === 'week' || mode === 'range' ? mode : null;
+  const normalized = {
+    mode: safeMode,
+    anchorISO: typeof anchorISO === 'string' ? anchorISO : null,
+    customStartISO: typeof customStartISO === 'string' ? customStartISO : null,
+    customEndISO: typeof customEndISO === 'string' ? customEndISO : null,
+    activeRangeId: typeof activeRangeId === 'string' ? activeRangeId : null
+  };
+  if (
+    !normalized.mode &&
+    !normalized.anchorISO &&
+    !normalized.customStartISO &&
+    !normalized.customEndISO &&
+    !normalized.activeRangeId
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
 function activeStateButtonClass(state: BodyState) {
@@ -135,10 +250,26 @@ export default function YearGrid({
   const [guideDismissed, setGuideDismissed] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [isEditingRange, setIsEditingRange] = useState(false);
+  const [storageStatus, setStorageStatus] = useState<string | null>(null);
+  const [ioStatus, setIOStatus] = useState<{ kind: 'ok' | 'error'; message: string } | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const tooltipSizeRef = useRef<{ w: number; h: number } | null>(null);
+  const tooltipStateRef = useRef<TooltipState>(null);
+  const columnsRef = useRef<number>(columns);
 
   const nowYear = now.getFullYear();
   const nowMonthIndex = now.getMonth();
   const nowDate = now.getDate();
+  const tooltipKey = tooltip?.day.isoDate ?? null;
+
+  useEffect(() => {
+    columnsRef.current = columns;
+  }, [columns]);
+
+  useEffect(() => {
+    tooltipStateRef.current = tooltip;
+  }, [tooltip]);
 
   const currentMonth = useMemo(() => nowMonthIndex + 1, [nowMonthIndex]);
   const todayStart = useMemo(
@@ -288,6 +419,174 @@ export default function YearGrid({
     setIsEditingRange(false);
   }, [activeRangeId, ranges]);
 
+  const exportData = useCallback(() => {
+    const payload = {
+      version: 1,
+      exportedAtISO: new Date().toISOString(),
+      entries,
+      ranges,
+      viewPref: {
+        mode: viewMode,
+        anchorISO,
+        customStartISO,
+        customEndISO,
+        activeRangeId
+      },
+      guideDismissed
+    };
+    const text = JSON.stringify(payload, null, 2);
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `yeargrid_backup_${format(new Date(), 'yyyyMMdd_HHmmss')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setIOStatus({ kind: 'ok', message: '已导出备份文件。' });
+  }, [activeRangeId, anchorISO, customEndISO, customStartISO, entries, guideDismissed, ranges, viewMode]);
+
+  const triggerImport = useCallback(() => {
+    setIOStatus(null);
+    importInputRef.current?.click();
+  }, []);
+
+  const onImportFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0] ?? null;
+      e.target.value = '';
+      if (!file) return;
+
+      if (file.size > 5 * 1024 * 1024) {
+        setIOStatus({ kind: 'error', message: '导入失败：文件过大（请使用 5MB 以内）。' });
+        return;
+      }
+
+      let raw = '';
+      try {
+        raw = await file.text();
+      } catch {
+        setIOStatus({ kind: 'error', message: '导入失败：无法读取文件内容。' });
+        return;
+      }
+
+      const parsed = safeParseJSON(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        setIOStatus({ kind: 'error', message: '导入失败：文件不是有效的 JSON 对象。' });
+        return;
+      }
+
+      const root = parsed as Record<string, unknown>;
+      const importedEntries = normalizeEntries(root.entries ?? root);
+      const importedRanges = normalizeRanges(root.ranges);
+      const importedPref = normalizeViewPref(root.viewPref ?? root);
+
+      const hasEntries = !!(importedEntries && Object.keys(importedEntries).length > 0);
+      const hasRanges = importedRanges !== null && importedRanges.length > 0;
+      const hasPref = importedPref !== null;
+      const hasGuide = typeof root.guideDismissed === 'boolean';
+
+      if (!hasEntries && !hasRanges && !hasPref && !hasGuide) {
+        setIOStatus({ kind: 'error', message: '导入失败：未识别到可用数据。' });
+        return;
+      }
+
+      const overwrite = window.confirm('导入会覆盖本地数据。确定=覆盖；取消=合并。');
+
+      const nextEntries: Record<string, Entry> = overwrite
+        ? importedEntries ?? {}
+        : {
+            ...entries,
+            ...(importedEntries ?? {})
+          };
+
+      const mergeRanges = (base: SavedRange[], incoming: SavedRange[]) => {
+        const usedIds = new Set(base.map((r) => r.id));
+        const usedNames = new Set(base.map((r) => r.name.trim()));
+        const out = [...base];
+        for (const r of incoming) {
+          let id = r.id;
+          if (!id || usedIds.has(id)) id = `range_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+          usedIds.add(id);
+          let name = r.name.trim() || '区间';
+          if (usedNames.has(name)) {
+            let i = 2;
+            while (usedNames.has(`${name}-${i}`)) i += 1;
+            name = `${name}-${i}`;
+          }
+          usedNames.add(name);
+          out.push({ ...r, id, name });
+        }
+        return out;
+      };
+
+      const nextRanges: SavedRange[] =
+        importedRanges && importedRanges.length > 0
+          ? overwrite
+            ? importedRanges
+            : mergeRanges(ranges, importedRanges)
+          : ranges;
+
+      setEntries(nextEntries);
+      try {
+        localStorage.setItem('yeargrid_entries_v1', JSON.stringify(nextEntries));
+      } catch {
+        setIOStatus({ kind: 'error', message: '导入完成，但保存到本地失败（可能是存储空间不足）。' });
+        return;
+      }
+
+      if (importedRanges && importedRanges.length > 0) {
+        setRanges(nextRanges);
+        try {
+          localStorage.setItem('yeargrid_ranges_v1', JSON.stringify(nextRanges));
+        } catch {
+          setIOStatus({ kind: 'error', message: '导入完成，但保存区间到本地失败（可能是存储空间不足）。' });
+          return;
+        }
+      }
+
+      if (overwrite && importedPref) {
+        if (importedPref.mode) setViewMode(importedPref.mode);
+        if (importedPref.anchorISO) setAnchorISO(importedPref.anchorISO);
+
+        const preferActive = importedPref.activeRangeId
+          ? nextRanges.find((r) => r.id === importedPref.activeRangeId) ?? null
+          : null;
+
+        if (preferActive) {
+          setActiveRangeId(preferActive.id);
+          setCustomStartISO(preferActive.startISO);
+          setCustomEndISO(preferActive.endISO);
+          setRangeDraftStartISO(preferActive.startISO);
+          setRangeDraftEndISO(preferActive.endISO);
+          setRangeDraftName(preferActive.name);
+        } else if (importedPref.customStartISO && importedPref.customEndISO) {
+          setActiveRangeId(null);
+          setCustomStartISO(importedPref.customStartISO);
+          setCustomEndISO(importedPref.customEndISO);
+          setRangeDraftStartISO(importedPref.customStartISO);
+          setRangeDraftEndISO(importedPref.customEndISO);
+          setRangeDraftName('');
+        }
+      }
+
+      if (typeof root.guideDismissed === 'boolean') {
+        setGuideDismissed(root.guideDismissed);
+        try {
+          localStorage.setItem('yeargrid_guide_dismissed_v1', root.guideDismissed ? '1' : '0');
+        } catch {
+          setIOStatus({ kind: 'error', message: '导入完成，但保存引导状态到本地失败（可能是存储空间不足）。' });
+          return;
+        }
+      }
+
+      setIsEditingRange(false);
+      setIOStatus({ kind: 'ok', message: overwrite ? '导入完成：已覆盖本地数据。' : '导入完成：已合并本地数据。' });
+    },
+    [entries, ranges]
+  );
+
   const percentText = useMemo(
     () => `${Math.floor(percent).toString()}%`,
     [percent]
@@ -327,40 +626,44 @@ export default function YearGrid({
   }, [stateMeta]);
 
   useEffect(() => {
-    let initialEntries: Record<string, Entry> | null = null;
     const rawEntries = localStorage.getItem('yeargrid_entries_v1');
-    if (rawEntries) {
-      try {
-        const parsed = JSON.parse(rawEntries) as unknown;
-        if (parsed && typeof parsed === 'object') {
-          initialEntries = parsed as Record<string, Entry>;
-        }
-      } catch {}
+    const parsedEntries = safeParseJSON(rawEntries);
+    const normalizedEntries = normalizeEntries(parsedEntries);
+    if (rawEntries && parsedEntries === null) {
+      localStorage.setItem(`yeargrid_entries_v1_corrupt_${Date.now()}`, rawEntries);
+      localStorage.removeItem('yeargrid_entries_v1');
+      setStorageStatus('检测到本地 entries 数据损坏，已备份并重置。');
     }
 
-    if (!initialEntries) {
+    if (normalizedEntries) {
+      setEntries(normalizedEntries);
+    } else {
       const rawMarks = localStorage.getItem('yeargrid_marks_v1');
-      if (rawMarks) {
-        try {
-          const parsed = JSON.parse(rawMarks) as unknown;
-          if (parsed && typeof parsed === 'object') {
-            const next: Record<string, Entry> = {};
-            for (const [isoDate, value] of Object.entries(parsed as Record<string, unknown>)) {
-              if (!value || typeof value !== 'object') continue;
-              const kind = (value as { kind?: unknown }).kind;
-              const note = typeof (value as { note?: unknown }).note === 'string' ? (value as { note: string }).note : '';
-              const state: BodyState = kind === 'done' ? 4 : kind === 'event' ? 3 : 0;
-              if (state !== 0 || note.trim() !== '') next[isoDate] = { state, note: note.slice(0, 50) };
-            }
-            initialEntries = next;
-            localStorage.setItem('yeargrid_entries_v1', JSON.stringify(next));
-            localStorage.removeItem('yeargrid_marks_v1');
-          }
-        } catch {}
+      const parsedMarks = safeParseJSON(rawMarks);
+      if (rawMarks && parsedMarks === null) {
+        localStorage.setItem(`yeargrid_marks_v1_corrupt_${Date.now()}`, rawMarks);
+        localStorage.removeItem('yeargrid_marks_v1');
+        setStorageStatus((prev) => prev ?? '检测到本地 marks 数据损坏，已备份并重置。');
+      }
+
+      if (parsedMarks && typeof parsedMarks === 'object') {
+        const next: Record<string, Entry> = {};
+        for (const [isoDate, value] of Object.entries(parsedMarks as Record<string, unknown>)) {
+          if (!value || typeof value !== 'object') continue;
+          const kind = (value as { kind?: unknown }).kind;
+          const note =
+            typeof (value as { note?: unknown }).note === 'string'
+              ? (value as { note: string }).note
+              : '';
+          const state: BodyState = kind === 'done' ? 4 : kind === 'event' ? 3 : 0;
+          if (state !== 0 || note.trim() !== '') next[isoDate] = { state, note: note.slice(0, 50) };
+        }
+        setEntries(next);
+        localStorage.setItem('yeargrid_entries_v1', JSON.stringify(next));
+        localStorage.removeItem('yeargrid_marks_v1');
       }
     }
 
-    if (initialEntries) setEntries(initialEntries);
     setEntriesLoaded(true);
     setGuideDismissed(localStorage.getItem('yeargrid_guide_dismissed_v1') === '1');
   }, []);
@@ -383,29 +686,15 @@ export default function YearGrid({
 
     let loadedRanges: SavedRange[] = [defaultRange];
     const rawRanges = localStorage.getItem('yeargrid_ranges_v1');
-    if (rawRanges) {
-      try {
-        const parsed = JSON.parse(rawRanges) as unknown;
-        if (Array.isArray(parsed)) {
-          const cleaned: SavedRange[] = [];
-          for (const item of parsed) {
-            if (!item || typeof item !== 'object') continue;
-            const id = (item as { id?: unknown }).id;
-            const name = (item as { name?: unknown }).name;
-            const startISO = (item as { startISO?: unknown }).startISO;
-            const endISO = (item as { endISO?: unknown }).endISO;
-            if (
-              typeof id === 'string' &&
-              typeof name === 'string' &&
-              typeof startISO === 'string' &&
-              typeof endISO === 'string'
-            ) {
-              cleaned.push({ id, name, startISO, endISO });
-            }
-          }
-          if (cleaned.length > 0) loadedRanges = cleaned;
-        }
-      } catch {}
+    const parsedRanges = safeParseJSON(rawRanges);
+    const normalizedRanges = normalizeRanges(parsedRanges);
+    if (rawRanges && parsedRanges === null) {
+      localStorage.setItem(`yeargrid_ranges_v1_corrupt_${Date.now()}`, rawRanges);
+      localStorage.removeItem('yeargrid_ranges_v1');
+      setStorageStatus((prev) => prev ?? '检测到本地 ranges 数据损坏，已备份并重置。');
+    }
+    if (normalizedRanges && normalizedRanges.length > 0) {
+      loadedRanges = normalizedRanges;
     }
 
     setRanges(loadedRanges);
@@ -418,44 +707,43 @@ export default function YearGrid({
     }
 
     const rawPref = localStorage.getItem('yeargrid_view_pref_v1');
-    if (rawPref) {
-      try {
-        const parsed = JSON.parse(rawPref) as unknown;
-        if (parsed && typeof parsed === 'object') {
-          const mode = (parsed as { mode?: unknown }).mode;
-          const anchorISO = (parsed as { anchorISO?: unknown }).anchorISO;
-          const customStartISO = (parsed as { customStartISO?: unknown }).customStartISO;
-          const customEndISO = (parsed as { customEndISO?: unknown }).customEndISO;
-          const activeRangeId = (parsed as { activeRangeId?: unknown }).activeRangeId;
+    const parsedPref = safeParseJSON(rawPref);
+    const pref = normalizeViewPref(parsedPref);
+    if (rawPref && parsedPref === null) {
+      localStorage.setItem(`yeargrid_view_pref_v1_corrupt_${Date.now()}`, rawPref);
+      localStorage.removeItem('yeargrid_view_pref_v1');
+      setStorageStatus((prev) => prev ?? '检测到本地 view_pref 数据损坏，已备份并重置。');
+    }
+    if (pref) {
+      if (pref.mode) setViewMode(pref.mode);
+      if (pref.anchorISO) setAnchorISO(pref.anchorISO);
 
-          if (mode === 'year' || mode === 'month' || mode === 'week' || mode === 'range') {
-            setViewMode(mode);
-          }
-          if (typeof anchorISO === 'string') setAnchorISO(anchorISO);
-
-          if (typeof activeRangeId === 'string') {
-            const found = loadedRanges.find((r) => r.id === activeRangeId) ?? null;
-            if (found) {
-              setActiveRangeId(found.id);
-              setCustomStartISO(found.startISO);
-              setCustomEndISO(found.endISO);
-            }
-          } else if (typeof customStartISO === 'string' && typeof customEndISO === 'string') {
-            setCustomStartISO(customStartISO);
-            setCustomEndISO(customEndISO);
-            setRangeDraftStartISO(customStartISO);
-            setRangeDraftEndISO(customEndISO);
-            if (mode === 'range') {
-              const id = `range_${Date.now()}`;
-              const nextName = `区间${loadedRanges.length + 1}`;
-              const next: SavedRange = { id, name: nextName, startISO: customStartISO, endISO: customEndISO };
-              loadedRanges = [...loadedRanges, next];
-              setRanges(loadedRanges);
-              setActiveRangeId(id);
-            }
-          }
+      if (pref.activeRangeId) {
+        const found = loadedRanges.find((r) => r.id === pref.activeRangeId) ?? null;
+        if (found) {
+          setActiveRangeId(found.id);
+          setCustomStartISO(found.startISO);
+          setCustomEndISO(found.endISO);
+          setRangeDraftStartISO(found.startISO);
+          setRangeDraftEndISO(found.endISO);
+          setRangeDraftName(found.name);
         }
-      } catch {}
+      } else if (pref.customStartISO && pref.customEndISO) {
+        setCustomStartISO(pref.customStartISO);
+        setCustomEndISO(pref.customEndISO);
+        setRangeDraftStartISO(pref.customStartISO);
+        setRangeDraftEndISO(pref.customEndISO);
+        if (pref.mode === 'range') {
+          const id = `range_${Date.now()}`;
+          const desiredName = `区间${loadedRanges.length + 1}`;
+          const name = makeUniqueRangeName(desiredName, loadedRanges);
+          const next: SavedRange = { id, name, startISO: pref.customStartISO, endISO: pref.customEndISO };
+          loadedRanges = [...loadedRanges, next];
+          setRanges(loadedRanges);
+          setActiveRangeId(id);
+          setRangeDraftName(name);
+        }
+      }
     }
 
     setRangesLoaded(true);
@@ -505,16 +793,22 @@ export default function YearGrid({
         bestCols = 7;
         const idealCellSize = 52;
         const neededWidth = bestCols * idealCellSize + (bestCols - 1) * gap;
-        setColumns(7);
-        setGridMaxWidth(Math.min(availableWidth, neededWidth));
+        setColumns((prev) => (prev === 7 ? prev : 7));
+        const nextMax = Math.min(availableWidth, neededWidth);
+        setGridMaxWidth((prev) => (prev === nextMax ? prev : nextMax));
         return;
       }
 
+      const currentCols = clamp(columnsRef.current, minCols, maxCols);
+      const candidates: Array<{ cols: number; cellSize: number }> = [];
       for (let cols = minCols; cols <= maxCols; cols += 1) {
         const cellSize = Math.floor((availableWidth - gap * (cols - 1)) / cols);
         if (cellSize <= 2) continue;
         const rows = Math.ceil(count / cols);
         const gridHeight = rows * cellSize + gap * (rows - 1);
+        if (gridHeight <= availableHeight) {
+          candidates.push({ cols, cellSize });
+        }
         if (gridHeight <= availableHeight && cellSize > bestCellSize) {
           bestCols = cols;
           bestCellSize = cellSize;
@@ -529,6 +823,20 @@ export default function YearGrid({
         );
         bestCols = fallbackCols;
         bestCellSize = Math.floor((availableWidth - gap * (bestCols - 1)) / bestCols);
+      } else {
+        const tolerance = 1;
+        const nearBest = candidates.filter((c) => c.cellSize >= bestCellSize - tolerance);
+        if (nearBest.length > 0) {
+          nearBest.sort((a, b) => {
+            const da = Math.abs(a.cols - currentCols);
+            const db = Math.abs(b.cols - currentCols);
+            if (da !== db) return da - db;
+            if (a.cellSize !== b.cellSize) return b.cellSize - a.cellSize;
+            return a.cols - b.cols;
+          });
+          bestCols = nearBest[0]!.cols;
+          bestCellSize = nearBest[0]!.cellSize;
+        }
       }
 
       setColumns((prev) => (prev === bestCols ? prev : bestCols));
@@ -538,22 +846,36 @@ export default function YearGrid({
         const idealMaxCellSize = 52;
         if (bestCellSize > idealMaxCellSize) {
           const constrainedWidth = bestCols * idealMaxCellSize + (bestCols - 1) * gap;
-          setGridMaxWidth(constrainedWidth);
+          setGridMaxWidth((prev) => (prev === constrainedWidth ? prev : constrainedWidth));
         } else {
-          setGridMaxWidth(undefined);
+          setGridMaxWidth((prev) => (prev === undefined ? prev : undefined));
         }
       } else {
-        setGridMaxWidth(undefined);
+        setGridMaxWidth((prev) => (prev === undefined ? prev : undefined));
       }
     };
 
-    update();
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        update();
+      });
+    };
 
-    const ro = new ResizeObserver(() => update());
+    schedule();
+
+    const ro = new ResizeObserver(() => schedule());
     ro.observe(root);
     ro.observe(header);
+    window.addEventListener('resize', schedule);
 
-    return () => ro.disconnect();
+    return () => {
+      window.removeEventListener('resize', schedule);
+      ro.disconnect();
+      if (raf) window.cancelAnimationFrame(raf);
+    };
   }, [days.length, viewMode]);
 
   const selectedDay = useMemo(() => {
@@ -608,15 +930,28 @@ export default function YearGrid({
     el?.focus();
   }, []);
 
+  const clampTooltipPosition = useCallback((x: number, y: number) => {
+    const margin = 12;
+    const size = tooltipSizeRef.current;
+    if (!size) {
+      return {
+        x: clamp(x, margin, window.innerWidth - margin),
+        y: clamp(y, margin, window.innerHeight - margin)
+      };
+    }
+    const maxLeft = Math.max(margin, window.innerWidth - margin - size.w);
+    const maxTop = Math.max(margin, window.innerHeight - margin - size.h);
+    return { x: clamp(x, margin, maxLeft), y: clamp(y, margin, maxTop) };
+  }, []);
+
   const handleCellFocus = useCallback(
     (day: YearDay, e: FocusEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
-      const x = clamp(rect.right + 12, 12, window.innerWidth - 12);
-      const y = clamp(rect.top + 12, 12, window.innerHeight - 12);
+      const { x, y } = clampTooltipPosition(rect.right + 12, rect.top + 12);
       setTooltip({ day, x, y });
       setFocusedISODate(day.isoDate);
     },
-    []
+    [clampTooltipPosition]
   );
 
   const handleCellBlur = useCallback((day: YearDay) => {
@@ -624,21 +959,73 @@ export default function YearGrid({
   }, []);
 
   const handleCellHover = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
-    const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
-    const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
+    const { x, y } = clampTooltipPosition(e.clientX + 12, e.clientY + 12);
     setTooltip({ day, x, y });
-  }, []);
+  }, [clampTooltipPosition]);
 
   const handleCellMove = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
     setTooltip((prev) => {
       if (!prev || prev.day.isoDate !== day.isoDate) return prev;
-      const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
-      const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
+      const { x, y } = clampTooltipPosition(e.clientX + 12, e.clientY + 12);
       return { day: prev.day, x, y };
     });
-  }, []);
+  }, [clampTooltipPosition]);
 
   const handleCellLeave = useCallback(() => setTooltip(null), []);
+
+  useEffect(() => {
+    if (!tooltipKey) {
+      tooltipSizeRef.current = null;
+      return;
+    }
+
+    tooltipSizeRef.current = null;
+
+    const measureAndClamp = () => {
+      const el = tooltipRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      tooltipSizeRef.current = { w: rect.width, h: rect.height };
+      const margin = 12;
+      const maxLeft = Math.max(margin, window.innerWidth - margin - rect.width);
+      const maxTop = Math.max(margin, window.innerHeight - margin - rect.height);
+      setTooltip((prev) => {
+        if (!prev) return prev;
+        const nextX = clamp(prev.x, margin, maxLeft);
+        const nextY = clamp(prev.y, margin, maxTop);
+        if (Math.abs(nextX - prev.x) < 1 && Math.abs(nextY - prev.y) < 1) return prev;
+        return { ...prev, x: nextX, y: nextY };
+      });
+    };
+
+    const raf = window.requestAnimationFrame(measureAndClamp);
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [tooltipKey]);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (!tooltipStateRef.current) return;
+      const el = tooltipRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      tooltipSizeRef.current = { w: rect.width, h: rect.height };
+      const margin = 12;
+      const maxLeft = Math.max(margin, window.innerWidth - margin - rect.width);
+      const maxTop = Math.max(margin, window.innerHeight - margin - rect.height);
+      setTooltip((prev) => {
+        if (!prev) return prev;
+        const nextX = clamp(prev.x, margin, maxLeft);
+        const nextY = clamp(prev.y, margin, maxTop);
+        if (Math.abs(nextX - prev.x) < 1 && Math.abs(nextY - prev.y) < 1) return prev;
+        return { ...prev, x: nextX, y: nextY };
+      });
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const handleCellClick = useCallback((day: YearDay) => {
     setFocusedISODate(day.isoDate);
@@ -719,7 +1106,7 @@ export default function YearGrid({
     <div ref={rootRef} className="relative flex h-full w-full flex-col bg-zinc-50/30">
       <header
         ref={headerRef}
-        className="sticky top-0 z-20 mb-4 border-b border-zinc-200/60 bg-white/80 px-4 py-3 backdrop-blur-md md:mb-6"
+        className="sticky top-14 z-20 mb-4 border-b border-zinc-200/60 bg-white/80 px-4 py-3 backdrop-blur-md md:mb-6"
       >
         {/* Top Bar: Remaining | View Switcher | Percent */}
         <div className="flex items-center justify-between gap-4">
@@ -1126,6 +1513,29 @@ export default function YearGrid({
                 >
                   清除
                 </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  onClick={exportData}
+                >
+                  <Download className="h-3 w-3" />
+                  导出
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  onClick={triggerImport}
+                >
+                  <Upload className="h-3 w-3" />
+                  导入
+                </button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={onImportFileChange}
+                />
               </div>
 
               <div className="h-4 w-px bg-zinc-200" />
@@ -1140,6 +1550,19 @@ export default function YearGrid({
                 ))}
               </div>
             </div>
+            {(storageStatus || ioStatus) && (
+              <div className="mt-3 flex items-center justify-center">
+                <div
+                  className={`rounded-full border px-3 py-1 text-[10px] ${
+                    (ioStatus?.kind ?? 'ok') === 'error'
+                      ? 'border-rose-200 bg-rose-50 text-rose-700'
+                      : 'border-zinc-200 bg-white text-zinc-600'
+                  }`}
+                >
+                  {(ioStatus?.message ?? storageStatus) as string}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1248,6 +1671,7 @@ export default function YearGrid({
 
       {tooltip ? (
         <div
+          ref={tooltipRef}
           className="pointer-events-none fixed z-50 w-max max-w-[80vw] rounded-xl border border-zinc-200/70 bg-white/80 px-3 py-2 text-xs text-zinc-900 shadow-[0_14px_40px_rgba(0,0,0,0.10)] backdrop-blur-xl"
           style={{ left: tooltip.x, top: tooltip.y }}
         >

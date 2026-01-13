@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import TopNav from '@/components/TopNav';
 
 import './globals.css';
 
@@ -18,9 +19,11 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className="h-full">
       <body
-        className={`${inter.className} h-full text-zinc-950 antialiased`}
+        className={`${inter.className} flex h-full flex-col text-zinc-950 antialiased`}
       >
-        {children}
+        <TopNav />
+
+        <div className="min-h-0 flex-1">{children}</div>
       </body>
     </html>
   );
