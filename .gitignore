@@ -1,6 +1,5 @@
 node_modules
 .next
-.next-build
 .swc
 out
 dist
