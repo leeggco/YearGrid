@@ -3,7 +3,6 @@
 import {
   differenceInSeconds,
   eachDayOfInterval,
-  endOfDay,
   endOfYear,
   format,
   getDayOfYear,
@@ -18,10 +17,15 @@ export type DayState = 'past' | 'today' | 'future';
 
 export type YearDay = {
   date: Date;
+  isoDate: string;
+  month: number;
+  isWeekend: boolean;
+  isMonthStart: boolean;
   dayOfYear: number;
   state: DayState;
   daysLeft: number;
   label: string;
+  holiday?: string;
 };
 
 function formatRemaining(totalSeconds: number) {
@@ -35,7 +39,7 @@ function formatRemaining(totalSeconds: number) {
   return { days, hours, minutes, seconds };
 }
 
-export function useYearProgress() {
+export function useYearProgress(holidays?: Record<string, string>) {
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -47,21 +51,6 @@ export function useYearProgress() {
   const yearEnd = useMemo(() => endOfYear(now), [now]);
 
   const todayStart = useMemo(() => startOfDay(now), [now]);
-  const todayEnd = useMemo(() => endOfDay(now), [now]);
-  const todayTotalSeconds = useMemo(
-    () => differenceInSeconds(todayEnd, todayStart) + 1,
-    [todayEnd, todayStart]
-  );
-  const todayRemainingSeconds = useMemo(
-    () => Math.max(0, differenceInSeconds(todayEnd, now)),
-    [now, todayEnd]
-  );
-  const todayElapsedRatio = useMemo(() => {
-    if (todayTotalSeconds <= 0) return 1;
-    const elapsed = todayTotalSeconds - todayRemainingSeconds;
-    const ratio = elapsed / todayTotalSeconds;
-    return Math.min(1, Math.max(0, ratio));
-  }, [todayRemainingSeconds, todayTotalSeconds]);
 
   const remainingSeconds = useMemo(
     () => Math.max(0, differenceInSeconds(yearEnd, now)),
@@ -96,10 +85,26 @@ export function useYearProgress() {
 
       const daysLeft = Math.max(0, totalDays - dayOfYear);
       const label = `${format(date, 'yyyy年MM月dd日')} · 第${dayOfYear}天`;
+      const isoDate = format(date, 'yyyy-MM-dd');
+      const holiday = holidays?.[isoDate];
+      const month = date.getMonth() + 1;
+      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+      const isMonthStart = date.getDate() === 1;
 
-      return { date, dayOfYear, state, daysLeft, label } satisfies YearDay;
+      return {
+        date,
+        isoDate,
+        month,
+        isWeekend,
+        isMonthStart,
+        dayOfYear,
+        state,
+        daysLeft,
+        label,
+        holiday
+      } satisfies YearDay;
     });
-  }, [todayStart, yearEnd, yearStart]);
+  }, [holidays, todayStart, yearEnd, yearStart]);
 
   return {
     now,
