@@ -35,12 +35,14 @@ function getHolidaysAroundYear(baseYear: number) {
 }
 
 export default function HomePage() {
-  const holidays = getHolidaysAroundYear(new Date().getFullYear());
+  const initialNow = new Date();
+  const initialNowISO = initialNow.toISOString();
+  const holidays = getHolidaysAroundYear(initialNow.getFullYear());
 
   return (
-    <main className="h-screen w-screen px-4 py-4 md:px-8 md:py-8">
+    <main className="h-screen w-screen px-4 py-5 md:px-10 md:py-10">
       <div className="flex h-full w-full">
-        <YearGrid holidays={holidays} />
+        <YearGrid holidays={holidays} initialNowISO={initialNowISO} />
       </div>
     </main>
   );
