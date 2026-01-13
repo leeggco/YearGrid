@@ -66,14 +66,16 @@ export function useYearProgress(
   }, []);
 
   const mode = options?.mode ?? 'year';
-  const anchor = useMemo(() => {
-    if (!options?.anchorISO) return now;
+  const anchorISO = options?.anchorISO ?? '';
+  const anchorFromISO = useMemo(() => {
+    if (!anchorISO) return null;
     try {
-      return parseISO(options.anchorISO);
+      return parseISO(anchorISO);
     } catch {
-      return now;
+      return null;
     }
-  }, [now, options?.anchorISO]);
+  }, [anchorISO]);
+  const anchor = anchorFromISO ?? now;
 
   const rangeStart = useMemo(() => {
     switch (mode) {
@@ -119,7 +121,13 @@ export function useYearProgress(
     }
   }, [anchor, mode, options?.customEndISO, options?.customStartISO]);
 
-  const todayStart = useMemo(() => startOfDay(now), [now]);
+  const nowYear = now.getFullYear();
+  const nowMonthIndex = now.getMonth();
+  const nowDate = now.getDate();
+  const todayStart = useMemo(
+    () => startOfDay(new Date(nowYear, nowMonthIndex, nowDate)),
+    [nowYear, nowMonthIndex, nowDate]
+  );
 
   const remainingSeconds = useMemo(
     () => Math.max(0, differenceInSeconds(rangeEnd, now)),

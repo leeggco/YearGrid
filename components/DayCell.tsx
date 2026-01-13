@@ -1,7 +1,8 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import type { MouseEvent } from 'react';
+import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
+import { memo } from 'react';
 
 import type { DayState, YearDay } from '@/hooks/useYearProgress';
 
@@ -11,9 +12,14 @@ type Props = {
   onMove: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
   onLeave: () => void;
   onClick?: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
+  onFocus?: (day: YearDay, event: FocusEvent<HTMLDivElement>) => void;
+  onBlur?: (day: YearDay, event: FocusEvent<HTMLDivElement>) => void;
+  onKeyDown?: (day: YearDay, event: KeyboardEvent<HTMLDivElement>) => void;
   dimmed?: boolean;
   selected?: boolean;
   entry?: { state: 0 | 1 | 2 | 3 | 4 | 5; note: string } | null;
+  tabIndex?: number;
+  dataIso?: string;
 };
 
 function cellBase(state: DayState) {
@@ -44,18 +50,23 @@ function entryDotClass(state: 0 | 1 | 2 | 3 | 4 | 5) {
   }
 }
 
-export default function DayCell({
+function DayCell({
   day,
   onHover,
   onMove,
   onLeave,
   onClick,
+  onFocus,
+  onBlur,
+  onKeyDown,
   dimmed,
   selected,
-  entry
+  entry,
+  tabIndex,
+  dataIso
 }: Props) {
   const baseClasses =
-    'relative aspect-square w-full cursor-pointer rounded-[4px] transition-[transform,filter,background-color,border-color,opacity] duration-150 ease-out will-change-transform hover:z-10 hover:scale-[1.06] hover:brightness-105';
+    'relative aspect-square w-full cursor-pointer rounded-[4px] transition-[transform,filter,background-color,border-color,opacity] duration-150 ease-out will-change-transform hover:z-10 hover:scale-[1.06] hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-600/35 focus-visible:outline-offset-0';
 
   const holiday = day.holiday;
   const holidayNode = holiday ? (
@@ -117,6 +128,8 @@ export default function DayCell({
       <motion.div
         role="gridcell"
         aria-label={day.label}
+        data-iso={dataIso ?? day.isoDate}
+        tabIndex={tabIndex}
         className={`${baseClasses} ${cellBase(day.state)} ${selectedClass} ${dimmedClass}`}
         animate={{
           opacity: [0.92, 1, 0.92]
@@ -129,6 +142,9 @@ export default function DayCell({
         onMouseEnter={(e) => onHover(day, e)}
         onMouseMove={(e) => onMove(day, e)}
         onMouseLeave={onLeave}
+        onFocus={(e) => onFocus?.(day, e)}
+        onBlur={(e) => onBlur?.(day, e)}
+        onKeyDown={(e) => onKeyDown?.(day, e)}
         onClick={(e) => onClick?.(day, e)}
       >
         {monthNode}
@@ -142,10 +158,15 @@ export default function DayCell({
     <div
       role="gridcell"
       aria-label={day.label}
+      data-iso={dataIso ?? day.isoDate}
+      tabIndex={tabIndex}
       className={`${baseClasses} ${cellBase(day.state)} ${weekendClass} ${holidayClass} ${selectedClass} ${dimmedClass}`}
       onMouseEnter={(e) => onHover(day, e)}
       onMouseMove={(e) => onMove(day, e)}
       onMouseLeave={onLeave}
+      onFocus={(e) => onFocus?.(day, e)}
+      onBlur={(e) => onBlur?.(day, e)}
+      onKeyDown={(e) => onKeyDown?.(day, e)}
       onClick={(e) => onClick?.(day, e)}
     >
       {monthNode}
@@ -154,3 +175,5 @@ export default function DayCell({
     </div>
   );
 }
+
+export default memo(DayCell);

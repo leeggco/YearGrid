@@ -4,12 +4,15 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Filter,
   Plus,
   Settings2,
+  Trash2,
   X
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FocusEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addMonths,
   addWeeks,
@@ -50,6 +53,15 @@ type TooltipState =
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function makeUniqueRangeName(desired: string, ranges: SavedRange[]) {
+  const base = desired.trim() || '区间';
+  const taken = new Set(ranges.map((r) => r.name.trim()));
+  if (!taken.has(base)) return base;
+  let i = 2;
+  while (taken.has(`${base}-${i}`)) i += 1;
+  return `${base}-${i}`;
 }
 
 function activeStateButtonClass(state: BodyState) {
@@ -104,23 +116,43 @@ export default function YearGrid({
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
   const [columns, setColumns] = useState(32);
   const [gridMaxWidth, setGridMaxWidth] = useState<number | undefined>(undefined);
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [entriesLoaded, setEntriesLoaded] = useState(false);
   const [selectedISODate, setSelectedISODate] = useState<string | null>(null);
+  const [focusedISODate, setFocusedISODate] = useState<string | null>(null);
   const [highlightWeekends, setHighlightWeekends] = useState(false);
   const [highlightHolidays, setHighlightHolidays] = useState(false);
   const [highlightThisMonth, setHighlightThisMonth] = useState(false);
+  const [recordFilter, setRecordFilter] = useState<'all' | 'recorded' | 'unrecorded'>('all');
+  const [noteOnly, setNoteOnly] = useState(false);
+  const [stateFilters, setStateFilters] = useState<BodyState[]>([]);
+  const [noteQuery, setNoteQuery] = useState('');
   const [guideDismissed, setGuideDismissed] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [isEditingRange, setIsEditingRange] = useState(false);
 
-  const currentMonth = useMemo(() => now.getMonth() + 1, [now]);
-  const todayStart = useMemo(() => startOfDay(now), [now]);
+  const nowYear = now.getFullYear();
+  const nowMonthIndex = now.getMonth();
+  const nowDate = now.getDate();
+
+  const currentMonth = useMemo(() => nowMonthIndex + 1, [nowMonthIndex]);
+  const todayStart = useMemo(
+    () => startOfDay(new Date(nowYear, nowMonthIndex, nowDate)),
+    [nowYear, nowMonthIndex, nowDate]
+  );
   const activeRange = useMemo(() => {
     if (!activeRangeId) return null;
     return ranges.find((r) => r.id === activeRangeId) ?? null;
+  }, [activeRangeId, ranges]);
+
+  const activeRangeIndex = useMemo(() => {
+    if (!activeRangeId) return -1;
+    return ranges.findIndex((r) => r.id === activeRangeId);
   }, [activeRangeId, ranges]);
 
   const rangeDraftValid = useMemo(() => {
@@ -138,6 +170,30 @@ export default function YearGrid({
     if (trimmed) return trimmed;
     return `区间${ranges.length + 1}`;
   }, [rangeDraftName, ranges.length]);
+
+  const rangeDraftNameDuplicate = useMemo(() => {
+    const candidate = rangeDraftResolvedName.trim();
+    if (!candidate) return false;
+    return ranges.some((r) => r.id !== activeRangeId && r.name.trim() === candidate);
+  }, [activeRangeId, rangeDraftResolvedName, ranges]);
+
+  const rangeDraftOverlapWith = useMemo(() => {
+    if (!rangeDraftValid) return null;
+    try {
+      const draftStart = startOfDay(parseISO(rangeDraftStartISO));
+      const draftEnd = startOfDay(parseISO(rangeDraftEndISO));
+      for (const r of ranges) {
+        if (r.id === activeRangeId) continue;
+        const start = startOfDay(parseISO(r.startISO));
+        const end = startOfDay(parseISO(r.endISO));
+        const overlap = !isAfter(draftStart, end) && !isAfter(start, draftEnd);
+        if (overlap) return r.name;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [activeRangeId, rangeDraftEndISO, rangeDraftStartISO, rangeDraftValid, ranges]);
 
   const applyRangeDraftToActive = () => {
     if (!rangeDraftValid) return;
@@ -162,9 +218,10 @@ export default function YearGrid({
   const addNewRangeFromDraft = () => {
     if (!rangeDraftValid) return;
     const id = `range_${Date.now()}`;
+    const uniqueName = makeUniqueRangeName(rangeDraftResolvedName, ranges);
     const next: SavedRange = {
       id,
-      name: rangeDraftResolvedName,
+      name: uniqueName,
       startISO: rangeDraftStartISO,
       endISO: rangeDraftEndISO
     };
@@ -175,10 +232,74 @@ export default function YearGrid({
     setRangeDraftName('');
   };
 
+  const moveActiveRange = useCallback(
+    (direction: -1 | 1) => {
+      if (!activeRangeId) return;
+      const index = ranges.findIndex((r) => r.id === activeRangeId);
+      if (index < 0) return;
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= ranges.length) return;
+      const next = [...ranges];
+      const tmp = next[index];
+      next[index] = next[nextIndex];
+      next[nextIndex] = tmp;
+      setRanges(next);
+    },
+    [activeRangeId, ranges]
+  );
+
+  const deleteActiveRange = useCallback(() => {
+    if (!activeRangeId) return;
+    if (ranges.length <= 1) return;
+    const index = ranges.findIndex((r) => r.id === activeRangeId);
+    if (index < 0) return;
+    const nextRanges = ranges.filter((r) => r.id !== activeRangeId);
+    const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
+    setRanges(nextRanges);
+    setActiveRangeId(nextActive?.id ?? null);
+    if (nextActive) {
+      setCustomStartISO(nextActive.startISO);
+      setCustomEndISO(nextActive.endISO);
+      setRangeDraftStartISO(nextActive.startISO);
+      setRangeDraftEndISO(nextActive.endISO);
+      setRangeDraftName(nextActive.name);
+    }
+    setIsEditingRange(false);
+  }, [activeRangeId, ranges]);
+
+  const duplicateActiveRange = useCallback(() => {
+    if (!activeRangeId) return;
+    const index = ranges.findIndex((r) => r.id === activeRangeId);
+    if (index < 0) return;
+    const current = ranges[index];
+    if (!current) return;
+    const id = `range_${Date.now()}`;
+    const desired = `${current.name} 副本`;
+    const name = makeUniqueRangeName(desired, ranges);
+    const next: SavedRange = { id, name, startISO: current.startISO, endISO: current.endISO };
+    const nextRanges = [...ranges.slice(0, index + 1), next, ...ranges.slice(index + 1)];
+    setRanges(nextRanges);
+    setActiveRangeId(id);
+    setCustomStartISO(next.startISO);
+    setCustomEndISO(next.endISO);
+    setRangeDraftStartISO(next.startISO);
+    setRangeDraftEndISO(next.endISO);
+    setRangeDraftName(next.name);
+    setIsEditingRange(false);
+  }, [activeRangeId, ranges]);
+
   const percentText = useMemo(
     () => `${Math.floor(percent).toString()}%`,
     [percent]
   );
+
+  const scopeLabel = useMemo(() => {
+    if (viewMode === 'year') return format(rangeStart, 'yyyy年');
+    if (viewMode === 'month') return format(rangeStart, 'yyyy年MM月');
+    if (viewMode === 'week')
+      return `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`;
+    return `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`;
+  }, [rangeEnd, rangeStart, viewMode]);
 
   const stateMeta = useMemo(() => {
     const map: Record<BodyState, { label: string; emoji: string; dotClass: string }> =
@@ -385,7 +506,7 @@ export default function YearGrid({
         const idealCellSize = 52;
         const neededWidth = bestCols * idealCellSize + (bestCols - 1) * gap;
         setColumns(7);
-        setGridMaxWidth(neededWidth);
+        setGridMaxWidth(Math.min(availableWidth, neededWidth));
         return;
       }
 
@@ -440,13 +561,142 @@ export default function YearGrid({
     return days.find((d) => d.isoDate === selectedISODate) ?? null;
   }, [days, selectedISODate]);
 
+  useEffect(() => {
+    if (!selectedDay) return;
+    lastFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    requestAnimationFrame(() => modalRef.current?.focus());
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedISODate(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedDay]);
+
+  useEffect(() => {
+    if (selectedDay) return;
+    lastFocusedRef.current?.focus();
+  }, [selectedDay]);
+
   const selectedEntry = useMemo(() => {
     if (!selectedDay) return null;
     return entries[selectedDay.isoDate] ?? null;
   }, [entries, selectedDay]);
 
+  const dayIndexByISO = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < days.length; i += 1) {
+      map.set(days[i].isoDate, i);
+    }
+    return map;
+  }, [days]);
+
+  useEffect(() => {
+    if (days.length === 0) return;
+    const existing = focusedISODate ? dayIndexByISO.has(focusedISODate) : false;
+    if (existing) return;
+    const next =
+      days.find((d) => d.state === 'today')?.isoDate ?? days[0].isoDate;
+    setFocusedISODate(next);
+  }, [dayIndexByISO, days, focusedISODate]);
+
+  const focusCell = useCallback((isoDate: string) => {
+    const root = gridRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-iso="${isoDate}"]`);
+    el?.focus();
+  }, []);
+
+  const handleCellFocus = useCallback(
+    (day: YearDay, e: FocusEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = clamp(rect.right + 12, 12, window.innerWidth - 12);
+      const y = clamp(rect.top + 12, 12, window.innerHeight - 12);
+      setTooltip({ day, x, y });
+      setFocusedISODate(day.isoDate);
+    },
+    []
+  );
+
+  const handleCellBlur = useCallback((day: YearDay) => {
+    setTooltip((prev) => (prev?.day.isoDate === day.isoDate ? null : prev));
+  }, []);
+
+  const handleCellHover = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
+    const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
+    const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
+    setTooltip({ day, x, y });
+  }, []);
+
+  const handleCellMove = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
+    setTooltip((prev) => {
+      if (!prev || prev.day.isoDate !== day.isoDate) return prev;
+      const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
+      const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
+      return { day: prev.day, x, y };
+    });
+  }, []);
+
+  const handleCellLeave = useCallback(() => setTooltip(null), []);
+
+  const handleCellClick = useCallback((day: YearDay) => {
+    setFocusedISODate(day.isoDate);
+    setSelectedISODate(day.isoDate);
+  }, []);
+
+  const handleCellKeyDown = useCallback(
+    (day: YearDay, e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        e.key === 'ArrowLeft' ||
+        e.key === 'ArrowRight' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'ArrowDown' ||
+        e.key === 'Home' ||
+        e.key === 'End'
+      ) {
+        e.preventDefault();
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleCellClick(day);
+        return;
+      }
+
+      const currentIndex = dayIndexByISO.get(day.isoDate);
+      if (currentIndex === undefined) return;
+
+      let nextIndex: number | null = null;
+      if (e.key === 'ArrowLeft') nextIndex = currentIndex - 1;
+      if (e.key === 'ArrowRight') nextIndex = currentIndex + 1;
+      if (e.key === 'ArrowUp') nextIndex = currentIndex - columns;
+      if (e.key === 'ArrowDown') nextIndex = currentIndex + columns;
+      if (e.key === 'Home') nextIndex = 0;
+      if (e.key === 'End') nextIndex = days.length - 1;
+      if (nextIndex === null) return;
+
+      nextIndex = clamp(nextIndex, 0, days.length - 1);
+      const nextISO = days[nextIndex]?.isoDate;
+      if (!nextISO) return;
+
+      setFocusedISODate(nextISO);
+      requestAnimationFrame(() => focusCell(nextISO));
+    },
+    [columns, dayIndexByISO, days, focusCell, handleCellClick]
+  );
+
+  const toggleStateFilter = useCallback((state: BodyState) => {
+    if (state === 0) return;
+    setStateFilters((prev) => {
+      const exists = prev.includes(state);
+      const next = exists ? prev.filter((s) => s !== state) : [...prev, state];
+      next.sort((a, b) => a - b);
+      return next;
+    });
+  }, []);
+
   const effectiveHighlightThisMonth = viewMode === 'year' && highlightThisMonth;
-  const anyHighlight = highlightWeekends || highlightHolidays || effectiveHighlightThisMonth;
 
   const guideVisible = useMemo(() => {
     if (guideDismissed) return false;
@@ -518,8 +768,13 @@ export default function YearGrid({
           </div>
 
           <div className="flex w-24 items-center justify-end gap-3 md:w-32">
-            <div className="text-xl font-bold tracking-tight text-zinc-900 md:text-2xl">
-              {percentText}
+            <div className="flex flex-col items-end">
+              <div className="text-xl font-bold tracking-tight text-zinc-900 md:text-2xl">
+                {percentText}
+              </div>
+              <div className="mt-0.5 text-[10px] font-medium text-zinc-400">
+                {scopeLabel}
+              </div>
             </div>
             <button
               type="button"
@@ -532,6 +787,15 @@ export default function YearGrid({
             >
               <Filter className="h-4 w-4" />
             </button>
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <div className="h-1.5 w-full rounded-full bg-zinc-100">
+            <div
+              className="h-1.5 rounded-full bg-zinc-900/80"
+              style={{ width: `${percent}%` }}
+            />
           </div>
         </div>
 
@@ -641,39 +905,88 @@ export default function YearGrid({
               </div>
 
               {isEditingRange && (
-                <div className="absolute top-full z-30 mt-1 flex animate-in fade-in slide-in-from-top-2 items-center gap-2 rounded-xl border border-zinc-200/60 bg-white/90 p-2 shadow-lg backdrop-blur-xl">
-                  <input
-                    type="text"
-                    className="w-[10ch] rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                    placeholder="名称"
-                    value={rangeDraftName}
-                    onChange={(e) => setRangeDraftName(e.target.value)}
-                  />
-                  <div className="h-4 w-px bg-zinc-200" />
-                  <input
-                    type="date"
-                    className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                    value={rangeDraftStartISO}
-                    onChange={(e) => setRangeDraftStartISO(e.target.value)}
-                  />
-                  <span className="text-zinc-300">-</span>
-                  <input
-                    type="date"
-                    className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                    value={rangeDraftEndISO}
-                    onChange={(e) => setRangeDraftEndISO(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    disabled={!rangeDraftValid || !activeRangeId}
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-white shadow-sm hover:bg-zinc-700 disabled:bg-zinc-200"
-                    onClick={() => {
-                      applyRangeDraftToActive();
-                      setIsEditingRange(false);
-                    }}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                  </button>
+                <div className="absolute top-full z-30 mt-1 flex animate-in fade-in slide-in-from-top-2 flex-col gap-2 rounded-xl border border-zinc-200/60 bg-white/90 p-2 shadow-lg backdrop-blur-xl">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={activeRangeIndex <= 0}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
+                      onClick={() => moveActiveRange(-1)}
+                      title="左移"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={activeRangeIndex < 0 || activeRangeIndex >= ranges.length - 1}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
+                      onClick={() => moveActiveRange(1)}
+                      title="右移"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="h-4 w-px bg-zinc-200" />
+                    <input
+                      type="text"
+                      className="w-[10ch] rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
+                      placeholder="名称"
+                      value={rangeDraftName}
+                      onChange={(e) => setRangeDraftName(e.target.value)}
+                    />
+                    <div className="h-4 w-px bg-zinc-200" />
+                    <input
+                      type="date"
+                      className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
+                      value={rangeDraftStartISO}
+                      onChange={(e) => setRangeDraftStartISO(e.target.value)}
+                    />
+                    <span className="text-zinc-300">-</span>
+                    <input
+                      type="date"
+                      className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
+                      value={rangeDraftEndISO}
+                      onChange={(e) => setRangeDraftEndISO(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      disabled={!rangeDraftValid || !activeRangeId}
+                      className="ml-1 flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-white shadow-sm hover:bg-zinc-700 disabled:bg-zinc-200"
+                      onClick={() => {
+                        applyRangeDraftToActive();
+                        setIsEditingRange(false);
+                      }}
+                      title="保存"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!activeRangeId}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
+                      onClick={duplicateActiveRange}
+                      title="复制当前区间"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!activeRangeId || ranges.length <= 1}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
+                      onClick={deleteActiveRange}
+                      title={ranges.length <= 1 ? '至少保留一个区间' : '删除当前区间'}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  {(rangeDraftNameDuplicate || rangeDraftOverlapWith) && (
+                    <div className="flex flex-col gap-1 px-1 text-[10px] text-amber-600">
+                      {rangeDraftNameDuplicate && <div>名称与其他区间重复</div>}
+                      {rangeDraftOverlapWith && (
+                        <div>与“{rangeDraftOverlapWith}”时间重叠</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -685,7 +998,7 @@ export default function YearGrid({
           <div className="mt-4 animate-in fade-in slide-in-from-top-2 border-t border-zinc-100 pt-4">
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3">
               {/* Filters */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">
                   过滤
                 </span>
@@ -727,6 +1040,92 @@ export default function YearGrid({
                     本月
                   </button>
                 )}
+                <div className="h-4 w-px bg-zinc-200" />
+                <button
+                  type="button"
+                  aria-pressed={recordFilter === 'recorded'}
+                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
+                    recordFilter === 'recorded'
+                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
+                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
+                  }`}
+                  onClick={() =>
+                    setRecordFilter((v) => (v === 'recorded' ? 'all' : 'recorded'))
+                  }
+                >
+                  已记录
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={recordFilter === 'unrecorded'}
+                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
+                    recordFilter === 'unrecorded'
+                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
+                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
+                  }`}
+                  onClick={() =>
+                    setRecordFilter((v) => (v === 'unrecorded' ? 'all' : 'unrecorded'))
+                  }
+                >
+                  未记录
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={noteOnly}
+                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
+                    noteOnly
+                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
+                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
+                  }`}
+                  onClick={() => setNoteOnly((v) => !v)}
+                >
+                  有备注
+                </button>
+                <div className="h-4 w-px bg-zinc-200" />
+                <div className="flex items-center gap-1">
+                  {([1, 2, 3, 4, 5] as const).map((s) => {
+                    const active = stateFilters.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        aria-pressed={active}
+                        className={`rounded-full border px-2 py-0.5 text-[10px] transition ${
+                          active
+                            ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
+                            : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
+                        }`}
+                        onClick={() => toggleStateFilter(s)}
+                        title={stateMeta[s].label}
+                      >
+                        {stateMeta[s].emoji}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="h-4 w-px bg-zinc-200" />
+                <input
+                  type="text"
+                  className="h-6 w-[18ch] rounded-md border border-zinc-200 bg-white px-2 text-[10px] text-zinc-900 outline-none focus:border-zinc-300"
+                  placeholder="搜备注"
+                  value={noteQuery}
+                  onChange={(e) => setNoteQuery(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  onClick={() => {
+                    setHighlightWeekends(false);
+                    setHighlightHolidays(false);
+                    setHighlightThisMonth(false);
+                    setRecordFilter('all');
+                    setNoteOnly(false);
+                    setStateFilters([]);
+                    setNoteQuery('');
+                  }}
+                >
+                  清除
+                </button>
               </div>
 
               <div className="h-4 w-px bg-zinc-200" />
@@ -772,6 +1171,7 @@ export default function YearGrid({
 
       <div className="flex w-full flex-1 justify-center overflow-y-auto px-4 pb-4">
         <div
+          ref={gridRef}
           role="grid"
           aria-label={
             viewMode === 'year'
@@ -782,7 +1182,7 @@ export default function YearGrid({
               ? '本周每天网格'
               : '区间每天网格'
           }
-          className="grid w-full h-fit"
+          className="grid h-fit w-full"
           style={{
             gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
             gap: 4,
@@ -790,42 +1190,59 @@ export default function YearGrid({
           }}
         >
           {days.map((day) => {
-          const matchesHighlight =
-            !anyHighlight ||
-            (highlightWeekends && day.isWeekend) ||
-            (highlightHolidays && !!day.holiday) ||
-            (effectiveHighlightThisMonth && day.month === currentMonth);
-          const dimmed = anyHighlight && !matchesHighlight;
-          const entry = entries[day.isoDate] ?? null;
-          const selected = selectedISODate === day.isoDate;
+            const entry = entries[day.isoDate] ?? null;
+            const selected = selectedISODate === day.isoDate;
 
-          return (
-            <DayCell
-              key={day.isoDate}
-              day={day}
-              dimmed={dimmed}
-              selected={selected}
-              entry={entry}
-              onHover={(d, e) => {
-                const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
-                const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
-                setTooltip({ day: d, x, y });
-              }}
-              onMove={(d, e) => {
-                setTooltip((prev) => {
-                  if (!prev || prev.day.isoDate !== d.isoDate) return prev;
-                  const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
-                  const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);
-                  return { day: prev.day, x, y };
-                });
-              }}
-              onLeave={() => setTooltip(null)}
-              onClick={(d) => {
-                setSelectedISODate(d.isoDate);
-              }}
-            />
-          );
-        })}
+            const propertyHighlightActive =
+              highlightWeekends || highlightHolidays || effectiveHighlightThisMonth;
+            const propertyMatch =
+              !propertyHighlightActive ||
+              (highlightWeekends && day.isWeekend) ||
+              (highlightHolidays && !!day.holiday) ||
+              (effectiveHighlightThisMonth && day.month === currentMonth);
+
+            const recorded = !!entry;
+            const hasNote = !!entry?.note.trim();
+            const recordMatch =
+              recordFilter === 'all'
+                ? true
+                : recordFilter === 'recorded'
+                  ? recorded
+                  : !recorded;
+            const noteMatch = !noteOnly || hasNote;
+            const stateMatch =
+              stateFilters.length === 0 ? true : entry ? stateFilters.includes(entry.state) : false;
+            const q = noteQuery.trim().toLowerCase();
+            const queryMatch = !q || (hasNote && entry!.note.toLowerCase().includes(q));
+
+            const anyFilter =
+              propertyHighlightActive ||
+              recordFilter !== 'all' ||
+              noteOnly ||
+              stateFilters.length > 0 ||
+              q !== '';
+            const matches = propertyMatch && recordMatch && noteMatch && stateMatch && queryMatch;
+            const dimmed = anyFilter && !matches;
+
+            return (
+              <DayCell
+                key={day.isoDate}
+                dataIso={day.isoDate}
+                tabIndex={focusedISODate === day.isoDate ? 0 : -1}
+                day={day}
+                dimmed={dimmed}
+                selected={selected}
+                entry={entry}
+                onHover={handleCellHover}
+                onMove={handleCellMove}
+                onLeave={handleCellLeave}
+                onFocus={handleCellFocus}
+                onBlur={handleCellBlur}
+                onKeyDown={handleCellKeyDown}
+                onClick={handleCellClick}
+              />
+            );
+          })}
       </div>
     </div>
 
@@ -861,11 +1278,26 @@ export default function YearGrid({
       ) : null}
 
       {selectedDay ? (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/20 p-4 md:items-center">
-          <div className="w-full max-w-[520px] rounded-2xl border border-zinc-200/70 bg-white/90 p-4 shadow-[0_22px_70px_rgba(0,0,0,0.14)] backdrop-blur-xl">
+        <div
+          className="fixed inset-0 z-40 flex items-end justify-center bg-black/20 p-4 md:items-center"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSelectedISODate(null);
+          }}
+        >
+          <div
+            ref={modalRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`day-dialog-title-${selectedDay.isoDate}`}
+            className="w-full max-w-[520px] rounded-2xl border border-zinc-200/70 bg-white/90 p-4 shadow-[0_22px_70px_rgba(0,0,0,0.14)] backdrop-blur-xl outline-none"
+          >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm text-zinc-950">
+                <div
+                  id={`day-dialog-title-${selectedDay.isoDate}`}
+                  className="text-sm text-zinc-950"
+                >
                   {selectedDay.label}
                 </div>
                 <div className="mt-1 text-xs text-zinc-600">
