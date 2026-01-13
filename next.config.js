@@ -1,5 +1,6 @@
 const nextConfig = {
-  reactStrictMode: true
+  reactStrictMode: true,
+  distDir: '.next-build'
 };
 
 module.exports = nextConfig;
