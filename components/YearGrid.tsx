@@ -19,7 +19,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export default function YearGrid() {
-  const { percent, remaining, days, todayElapsedRatio } = useYearProgress();
+  const { percent, remaining, days } = useYearProgress();
   const [tooltip, setTooltip] = useState<TooltipState>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
@@ -119,7 +119,6 @@ export default function YearGrid() {
           <DayCell
             key={day.dayOfYear}
             day={day}
-            todayElapsedRatio={day.state === 'today' ? todayElapsedRatio : undefined}
             onHover={(d, e) => {
               const x = clamp(e.clientX + 12, 12, window.innerWidth - 12);
               const y = clamp(e.clientY + 12, 12, window.innerHeight - 12);

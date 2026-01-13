@@ -7,7 +7,6 @@ import type { DayState, YearDay } from '@/hooks/useYearProgress';
 
 type Props = {
   day: YearDay;
-  todayElapsedRatio?: number;
   onHover: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
   onMove: (day: YearDay, event: MouseEvent<HTMLDivElement>) => void;
   onLeave: () => void;
@@ -24,13 +23,8 @@ function cellBase(state: DayState) {
   }
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 export default function DayCell({
   day,
-  todayElapsedRatio,
   onHover,
   onMove,
   onLeave

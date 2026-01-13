@@ -107,8 +107,6 @@ export function useYearProgress() {
     yearEnd,
     percent,
     remaining,
-    todayRemainingSeconds,
-    todayElapsedRatio,
     days
   };
 }
