@@ -1,0 +1,138 @@
+"use client";
+
+import { useMemo } from "react";
+import { differenceInCalendarDays, format, isAfter, isBefore, startOfDay, parseISO } from "date-fns";
+import { motion } from "framer-motion";
+import { SavedRange } from "./RangeSelector";
+
+interface RangeProgressHeaderProps {
+  range: SavedRange;
+  now: Date;
+}
+
+const themeStyles: Record<string, { bg: string, text: string, bar: string[], tag: string }> = {
+  emerald: { bg: "bg-emerald-50", text: "text-emerald-600", bar: ["from-emerald-500", "to-teal-400"], tag: "bg-emerald-50 text-emerald-600" },
+  blue: { bg: "bg-blue-50", text: "text-blue-600", bar: ["from-blue-500", "to-cyan-400"], tag: "bg-blue-50 text-blue-600" },
+  rose: { bg: "bg-rose-50", text: "text-rose-600", bar: ["from-rose-500", "to-pink-400"], tag: "bg-rose-50 text-rose-600" },
+  amber: { bg: "bg-amber-50", text: "text-amber-600", bar: ["from-amber-500", "to-orange-400"], tag: "bg-amber-50 text-amber-600" },
+  violet: { bg: "bg-violet-50", text: "text-violet-600", bar: ["from-violet-500", "to-purple-400"], tag: "bg-violet-50 text-violet-600" },
+  cyan: { bg: "bg-cyan-50", text: "text-cyan-600", bar: ["from-cyan-500", "to-sky-400"], tag: "bg-cyan-50 text-cyan-600" },
+};
+
+export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
+  const theme = themeStyles[range.color || 'emerald'] || themeStyles.emerald;
+  const stats = useMemo(() => {
+    const start = startOfDay(parseISO(range.startISO));
+    const end = startOfDay(parseISO(range.endISO));
+    const today = startOfDay(now);
+
+    const totalDays = differenceInCalendarDays(end, start) + 1;
+    
+    let daysPassed = 0;
+    if (isAfter(today, start)) {
+      daysPassed = differenceInCalendarDays(today, start); // 不包含今天，或者视需求包含
+      // 如果包含今天作为"进行中"，通常已过是指完全过去的天数。
+      // 这里我们采用：如果今天是开始的第一天，passed=0。
+      // 如果今天是结束日，passed = total - 1。
+      // 但为了直观，通常包含今天在内的"已度过"可能更好理解，或者用"第N天"概念。
+      // 这里采用：已过 = 截止昨天的天数。
+    }
+    
+    // 修正边界
+    if (isBefore(today, start)) daysPassed = 0;
+    if (isAfter(today, end)) daysPassed = totalDays;
+
+    // 当前第几天 (Current Day Index)
+    let currentDayIndex = 0;
+    if (!isBefore(today, start) && !isAfter(today, end)) {
+        currentDayIndex = differenceInCalendarDays(today, start) + 1;
+    }
+
+    const daysRemaining = Math.max(0, differenceInCalendarDays(end, today));
+
+    // 进度条显示的百分比：包含今天的一半或者基于时间的流逝？
+    // 简单起见，基于 (today - start) / total。
+    // 如果还没开始，0。如果结束，100。
+    let progressPercent = 0;
+    if (isAfter(today, end)) {
+        progressPercent = 100;
+    } else if (isBefore(today, start)) {
+        progressPercent = 0;
+    } else {
+        const daysFromStart = differenceInCalendarDays(today, start); // 0-indexed
+        // 加上今天的时间流逝？这里只算天。
+        progressPercent = ((daysFromStart + 0.5) / totalDays) * 100;
+    }
+
+    return {
+      totalDays,
+      daysPassed,
+      daysRemaining,
+      progressPercent,
+      isEnded: isAfter(today, end),
+      isUpcoming: isBefore(today, start),
+      currentDayIndex
+    };
+  }, [range, now]);
+
+  return (
+    <div className="mb-8 flex flex-col gap-6">
+      {/* Title & Meta */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-zinc-900 flex items-center gap-2">
+            {range.name}
+            {stats.isEnded && <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 font-medium">已结束</span>}
+            {stats.isUpcoming && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">未开始</span>}
+            {!stats.isEnded && !stats.isUpcoming && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${theme.tag}`}>进行中</span>}
+          </h2>
+          <div className="text-sm text-zinc-500 mt-1 font-medium tabular-nums">
+            {format(parseISO(range.startISO), "yyyy.MM.dd")} - {format(parseISO(range.endISO), "yyyy.MM.dd")}
+            <span className="mx-2">·</span>
+            共 {stats.totalDays} 天
+          </div>
+        </div>
+
+        {/* Big Stats */}
+        <div className="flex items-center gap-6">
+            {!stats.isUpcoming && !stats.isEnded && (
+                <div className="text-right">
+                    <div className="text-sm text-zinc-500">剩余</div>
+                    <div className="text-2xl font-bold text-zinc-900 tabular-nums">{stats.daysRemaining}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
+                </div>
+            )}
+             {!stats.isUpcoming && !stats.isEnded && (
+                <div className="text-right">
+                    <div className="text-sm text-zinc-500">当前</div>
+                    <div className="text-2xl font-bold text-emerald-600 tabular-nums">Day {stats.currentDayIndex}</div>
+                </div>
+            )}
+            {stats.isUpcoming && (
+                 <div className="text-right">
+                    <div className="text-sm text-zinc-500">距离开始</div>
+                    <div className="text-2xl font-bold text-blue-600 tabular-nums">{differenceInCalendarDays(parseISO(range.startISO), now)}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
+                </div>
+            )}
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="relative h-4 w-full overflow-hidden rounded-full bg-zinc-100">
+        <motion.div
+          className={`absolute inset-y-0 left-0 bg-gradient-to-r ${theme.bar[0]} ${theme.bar[1]}`}
+          initial={{ width: 0 }}
+          animate={{ width: `${stats.progressPercent}%` }}
+          transition={{ duration: 1, ease: "easeOut" }}
+        />
+        <div className="absolute inset-0 opacity-10 bg-[length:10px_10px] bg-[linear-gradient(45deg,rgba(255,255,255,0.5)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.5)_50%,rgba(255,255,255,0.5)_75%,transparent_75%,transparent)]" />
+      </div>
+      
+      {/* Percentage Label */}
+      <div className="flex justify-between text-xs font-medium text-zinc-400 mt-[-16px]">
+        <span>0%</span>
+        <span className="text-emerald-600">{stats.progressPercent.toFixed(1)}%</span>
+        <span>100%</span>
+      </div>
+    </div>
+  );
+}

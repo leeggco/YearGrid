@@ -143,26 +143,36 @@ export default function TopNav() {
 
   return (
     <>
-      <header className="sticky top-0 z-50 h-14 w-full border-b border-zinc-200/60 bg-white/80 backdrop-blur-md">
-        <div className="flex h-full w-full items-center justify-between px-4 md:px-10">
+      <header className="sticky top-0 z-50 w-full border-b border-zinc-200/60 bg-white/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-900 text-xs font-semibold text-white">
+            <span
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-xs font-bold text-white"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgb(5 150 105), rgb(14 116 144))'
+              }}
+            >
               YG
             </span>
-            <span className="hidden text-sm font-semibold text-zinc-900 sm:block">YearGrid</span>
+            <span className="text-base font-semibold text-zinc-900">YearGrid</span>
           </Link>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              className="rounded-full bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800"
+              className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900 transition-colors hover:bg-zinc-100/70"
               onClick={() => openAuth('login')}
             >
               登录
             </button>
             <button
               type="button"
-              className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              className="rounded-lg px-4 py-2 text-sm text-white transition-colors"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgb(5 150 105), rgb(14 116 144))'
+              }}
               onClick={() => openAuth('register')}
             >
               注册

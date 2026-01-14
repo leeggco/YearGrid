@@ -19,7 +19,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className="h-full">
       <body
-        className={`${inter.className} flex h-full flex-col text-zinc-950 antialiased`}
+        className={`${inter.className} flex min-h-screen flex-col bg-gradient-to-br from-zinc-50 via-white to-zinc-100/60 text-zinc-950 antialiased`}
       >
         <TopNav />
 

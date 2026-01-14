@@ -24,3 +24,6 @@ body {
   background-attachment: fixed;
   color: rgb(24 24 27);
 }
+.text-zinc-500 {
+  color: #4d5660;
+}

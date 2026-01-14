@@ -40,10 +40,8 @@ export default function HomePage() {
   const holidays = getHolidaysAroundYear(initialNow.getFullYear());
 
   return (
-    <main className="flex h-full w-full px-4 py-5 md:px-10 md:py-10">
-      <div className="flex min-h-0 w-full">
-        <YearGrid holidays={holidays} initialNowISO={initialNowISO} />
-      </div>
+    <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <YearGrid holidays={holidays} initialNowISO={initialNowISO} />
     </main>
   );
 }

@@ -4,9 +4,9 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Copy,
   Download,
   Filter,
+  MousePointer2,
   Plus,
   Settings2,
   Trash2,
@@ -16,18 +16,25 @@ import {
 import type { FocusEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  addDays,
   addMonths,
   addWeeks,
   differenceInCalendarDays,
+  differenceInSeconds,
+  endOfDay,
   endOfMonth,
   format,
   isAfter,
+  isBefore,
   parseISO,
   startOfDay,
   startOfMonth
 } from 'date-fns';
 
 import DayCell from '@/components/DayCell';
+import { Legend } from '@/components/legend';
+import { RangeProgressHeader } from '@/components/RangeProgressHeader';
+import { RangeSelector, SavedRange, ThemeColor } from '@/components/RangeSelector';
 import type { ViewMode, YearDay } from '@/hooks/useYearProgress';
 import { useYearProgress } from '@/hooks/useYearProgress';
 
@@ -36,13 +43,6 @@ type BodyState = 0 | 1 | 2 | 3 | 4 | 5;
 type Entry = {
   state: BodyState;
   note: string;
-};
-
-type SavedRange = {
-  id: string;
-  name: string;
-  startISO: string;
-  endISO: string;
 };
 
 type TooltipState =
@@ -213,12 +213,8 @@ export default function YearGrid({
   );
   const [ranges, setRanges] = useState<SavedRange[]>([]);
   const [activeRangeId, setActiveRangeId] = useState<string | null>(null);
-  const [rangeDraftStartISO, setRangeDraftStartISO] = useState(() =>
-    format(startOfMonth(new Date()), 'yyyy-MM-dd')
-  );
-  const [rangeDraftEndISO, setRangeDraftEndISO] = useState(() =>
-    format(endOfMonth(new Date()), 'yyyy-MM-dd')
-  );
+  const [rangeDraftStartISO, setRangeDraftStartISO] = useState('');
+  const [rangeDraftEndISO, setRangeDraftEndISO] = useState('');
   const [rangeDraftName, setRangeDraftName] = useState('');
   const [viewPrefLoaded, setViewPrefLoaded] = useState(false);
   const [rangesLoaded, setRangesLoaded] = useState(false);
@@ -250,6 +246,12 @@ export default function YearGrid({
   const [guideDismissed, setGuideDismissed] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [isEditingRange, setIsEditingRange] = useState(false);
+  const [rangeDraftColor, setRangeDraftColor] = useState<ThemeColor>('emerald');
+  const [rangeDraftSaving, setRangeDraftSaving] = useState(false);
+  const [dragStartISO, setDragStartISO] = useState<string | null>(null);
+  const [dragCurrentISO, setDragCurrentISO] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
   const [storageStatus, setStorageStatus] = useState<string | null>(null);
   const [ioStatus, setIOStatus] = useState<{ kind: 'ok' | 'error'; message: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -257,6 +259,10 @@ export default function YearGrid({
   const tooltipSizeRef = useRef<{ w: number; h: number } | null>(null);
   const tooltipStateRef = useRef<TooltipState>(null);
   const columnsRef = useRef<number>(columns);
+  const prevActiveRangeIdRef = useRef<string | null>(null);
+  const createOriginActiveRangeIdRef = useRef<string | null>(null);
+  const createOriginCustomStartISORef = useRef<string | null>(null);
+  const createOriginCustomEndISORef = useRef<string | null>(null);
 
   const nowYear = now.getFullYear();
   const nowMonthIndex = now.getMonth();
@@ -281,10 +287,67 @@ export default function YearGrid({
     return ranges.find((r) => r.id === activeRangeId) ?? null;
   }, [activeRangeId, ranges]);
 
-  const activeRangeIndex = useMemo(() => {
-    if (!activeRangeId) return -1;
-    return ranges.findIndex((r) => r.id === activeRangeId);
-  }, [activeRangeId, ranges]);
+  const isRangeEditing = viewMode === 'range' && isEditingRange;
+
+  const isCreatingRange = isRangeEditing && activeRangeId === null;
+
+  const createRangePreview = useMemo(() => {
+    if (!isCreatingRange) return null;
+
+    const bounds = (() => {
+      if (isDragging && dragStartISO && dragCurrentISO && dragStartISO !== dragCurrentISO) {
+        const s = dragStartISO < dragCurrentISO ? dragStartISO : dragCurrentISO;
+        const e = dragStartISO > dragCurrentISO ? dragStartISO : dragCurrentISO;
+        return { startISO: s, endISO: e };
+      }
+      if (rangeDraftStartISO && rangeDraftEndISO) {
+        return { startISO: rangeDraftStartISO, endISO: rangeDraftEndISO };
+      }
+      return null;
+    })();
+
+    if (!bounds) return null;
+
+    try {
+      const start = startOfDay(parseISO(bounds.startISO));
+      const end = startOfDay(parseISO(bounds.endISO));
+      if (isAfter(start, end)) return null;
+
+      const endAt = endOfDay(end);
+      const totalSeconds = differenceInSeconds(endAt, start);
+      const cursor = isBefore(now, start) ? start : isAfter(now, endAt) ? endAt : now;
+      const elapsedSeconds = differenceInSeconds(cursor, start);
+      const percent =
+        totalSeconds <= 0 ? 100 : Math.min(100, Math.max(0, (elapsedSeconds / totalSeconds) * 100));
+
+      const remainingSeconds = Math.max(0, differenceInSeconds(endAt, now));
+      const remDays = Math.floor(remainingSeconds / 86400);
+      const remHours = Math.floor((remainingSeconds % 86400) / 3600);
+      const remMinutes = Math.floor((remainingSeconds % 3600) / 60);
+      const remSeconds = remainingSeconds % 60;
+      const remainingText = `${remDays}天 ${remHours.toString().padStart(2, '0')}:${remMinutes
+        .toString()
+        .padStart(2, '0')}:${remSeconds.toString().padStart(2, '0')}`;
+
+      const totalDays = differenceInCalendarDays(end, start) + 1;
+      const elapsedDays = isBefore(now, start)
+        ? 0
+        : isAfter(now, endAt)
+          ? totalDays
+          : differenceInCalendarDays(todayStart, start) + 1;
+
+      return {
+        startISO: bounds.startISO,
+        endISO: bounds.endISO,
+        percent,
+        remainingText,
+        elapsedDays,
+        totalDays
+      };
+    } catch {
+      return null;
+    }
+  }, [dragCurrentISO, dragStartISO, isCreatingRange, isDragging, now, rangeDraftEndISO, rangeDraftStartISO, todayStart]);
 
   const rangeDraftValid = useMemo(() => {
     try {
@@ -296,128 +359,124 @@ export default function YearGrid({
     }
   }, [rangeDraftEndISO, rangeDraftStartISO]);
 
-  const rangeDraftResolvedName = useMemo(() => {
-    const trimmed = rangeDraftName.trim();
-    if (trimmed) return trimmed;
-    return `区间${ranges.length + 1}`;
-  }, [rangeDraftName, ranges.length]);
-
-  const rangeDraftNameDuplicate = useMemo(() => {
-    const candidate = rangeDraftResolvedName.trim();
-    if (!candidate) return false;
-    return ranges.some((r) => r.id !== activeRangeId && r.name.trim() === candidate);
-  }, [activeRangeId, rangeDraftResolvedName, ranges]);
-
-  const rangeDraftOverlapWith = useMemo(() => {
-    if (!rangeDraftValid) return null;
-    try {
-      const draftStart = startOfDay(parseISO(rangeDraftStartISO));
-      const draftEnd = startOfDay(parseISO(rangeDraftEndISO));
-      for (const r of ranges) {
-        if (r.id === activeRangeId) continue;
-        const start = startOfDay(parseISO(r.startISO));
-        const end = startOfDay(parseISO(r.endISO));
-        const overlap = !isAfter(draftStart, end) && !isAfter(start, draftEnd);
-        if (overlap) return r.name;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }, [activeRangeId, rangeDraftEndISO, rangeDraftStartISO, rangeDraftValid, ranges]);
+  useEffect(() => {
+    if (!isEditingRange) return;
+    setRangeDraftSaving(false);
+  }, [isEditingRange]);
 
   const applyRangeDraftToActive = () => {
     if (!rangeDraftValid) return;
     setCustomStartISO(rangeDraftStartISO);
     setCustomEndISO(rangeDraftEndISO);
-    if (!activeRangeId) return;
-    const nextName = rangeDraftName.trim();
+    
+    const desiredName = rangeDraftName.trim() || '新篇章';
+
+    if (!activeRangeId) {
+      const id = `range_${Date.now()}`;
+      setRanges((prev) => {
+        const name = makeUniqueRangeName(desiredName, prev);
+        const newRange: SavedRange = {
+          id,
+          name,
+          startISO: rangeDraftStartISO,
+          endISO: rangeDraftEndISO,
+          color: rangeDraftColor
+        };
+        return [...prev, newRange];
+      });
+      setActiveRangeId(id);
+      return;
+    }
+
     setRanges((prev) =>
       prev.map((r) =>
         r.id === activeRangeId
           ? {
               ...r,
-              name: nextName ? nextName : r.name,
+              name: desiredName,
               startISO: rangeDraftStartISO,
-              endISO: rangeDraftEndISO
+              endISO: rangeDraftEndISO,
+              color: rangeDraftColor
             }
           : r
       )
     );
   };
 
-  const addNewRangeFromDraft = () => {
-    if (!rangeDraftValid) return;
-    const id = `range_${Date.now()}`;
-    const uniqueName = makeUniqueRangeName(rangeDraftResolvedName, ranges);
-    const next: SavedRange = {
-      id,
-      name: uniqueName,
-      startISO: rangeDraftStartISO,
-      endISO: rangeDraftEndISO
-    };
-    setRanges((prev) => [...prev, next]);
-    setActiveRangeId(id);
-    setCustomStartISO(next.startISO);
-    setCustomEndISO(next.endISO);
-    setRangeDraftName('');
-  };
-
-  const moveActiveRange = useCallback(
-    (direction: -1 | 1) => {
-      if (!activeRangeId) return;
-      const index = ranges.findIndex((r) => r.id === activeRangeId);
-      if (index < 0) return;
-      const nextIndex = index + direction;
-      if (nextIndex < 0 || nextIndex >= ranges.length) return;
-      const next = [...ranges];
-      const tmp = next[index];
-      next[index] = next[nextIndex];
-      next[nextIndex] = tmp;
-      setRanges(next);
-    },
-    [activeRangeId, ranges]
-  );
-
   const deleteActiveRange = useCallback(() => {
     if (!activeRangeId) return;
-    if (ranges.length <= 1) return;
+    // Allow deleting the last range
     const index = ranges.findIndex((r) => r.id === activeRangeId);
     if (index < 0) return;
     const nextRanges = ranges.filter((r) => r.id !== activeRangeId);
-    const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
+    const nextActive = nextRanges.length > 0 
+        ? nextRanges[Math.min(index, nextRanges.length - 1)] 
+        : null;
+    
     setRanges(nextRanges);
     setActiveRangeId(nextActive?.id ?? null);
+    
     if (nextActive) {
       setCustomStartISO(nextActive.startISO);
       setCustomEndISO(nextActive.endISO);
       setRangeDraftStartISO(nextActive.startISO);
       setRangeDraftEndISO(nextActive.endISO);
       setRangeDraftName(nextActive.name);
+      setEntries(nextActive.entries || {});
+    } else {
+      // Empty state
+      setEntries({});
     }
     setIsEditingRange(false);
   }, [activeRangeId, ranges]);
 
-  const duplicateActiveRange = useCallback(() => {
-    if (!activeRangeId) return;
-    const index = ranges.findIndex((r) => r.id === activeRangeId);
-    if (index < 0) return;
-    const current = ranges[index];
-    if (!current) return;
-    const id = `range_${Date.now()}`;
-    const desired = `${current.name} 副本`;
-    const name = makeUniqueRangeName(desired, ranges);
-    const next: SavedRange = { id, name, startISO: current.startISO, endISO: current.endISO };
-    const nextRanges = [...ranges.slice(0, index + 1), next, ...ranges.slice(index + 1)];
-    setRanges(nextRanges);
-    setActiveRangeId(id);
-    setCustomStartISO(next.startISO);
-    setCustomEndISO(next.endISO);
-    setRangeDraftStartISO(next.startISO);
-    setRangeDraftEndISO(next.endISO);
-    setRangeDraftName(next.name);
+  const beginCreateRange = useCallback(
+    (options?: { startISO?: string; endISO?: string; setVisibleDefault?: boolean }) => {
+      const base = startOfDay(new Date());
+      const defaultStartISO = format(base, 'yyyy-MM-dd');
+      const defaultEndISO = format(addDays(base, 100), 'yyyy-MM-dd');
+      const startISO = options?.startISO ?? defaultStartISO;
+      const endISO = options?.endISO ?? defaultEndISO;
+
+      createOriginActiveRangeIdRef.current = activeRangeId;
+
+      if (options?.setVisibleDefault) {
+        createOriginCustomStartISORef.current = customStartISO;
+        createOriginCustomEndISORef.current = customEndISO;
+        setCustomStartISO(startISO);
+        setCustomEndISO(endISO);
+      }
+
+      setActiveRangeId(null);
+      setRangeDraftName(makeUniqueRangeName('新篇章', ranges));
+      setRangeDraftStartISO('');
+      setRangeDraftEndISO('');
+      setRangeDraftColor('emerald');
+      setIsEditingRange(true);
+      setRangeDraftSaving(false);
+    },
+    [activeRangeId, customEndISO, customStartISO, ranges]
+  );
+
+  const cancelCreateRange = useCallback(() => {
+    if (!isRangeEditing || activeRangeId !== null) return;
+    setIsDragging(false);
+    setDragStartISO(null);
+    setDragCurrentISO(null);
+    setRangeDraftName('');
+    setRangeDraftColor('emerald');
+    setRangeDraftSaving(false);
     setIsEditingRange(false);
-  }, [activeRangeId, ranges]);
+    setActiveRangeId(createOriginActiveRangeIdRef.current);
+    createOriginActiveRangeIdRef.current = null;
+
+    if (createOriginCustomStartISORef.current && createOriginCustomEndISORef.current) {
+      setCustomStartISO(createOriginCustomStartISORef.current);
+      setCustomEndISO(createOriginCustomEndISORef.current);
+    }
+    createOriginCustomStartISORef.current = null;
+    createOriginCustomEndISORef.current = null;
+  }, [activeRangeId, isRangeEditing]);
 
   const exportData = useCallback(() => {
     const payload = {
@@ -592,13 +651,21 @@ export default function YearGrid({
     [percent]
   );
 
-  const scopeLabel = useMemo(() => {
-    if (viewMode === 'year') return format(rangeStart, 'yyyy年');
-    if (viewMode === 'month') return format(rangeStart, 'yyyy年MM月');
-    if (viewMode === 'week')
-      return `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`;
-    return `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`;
-  }, [rangeEnd, rangeStart, viewMode]);
+  const elapsedDays = useMemo(() => {
+    const idx = days.findIndex((d) => d.state === 'today');
+    if (idx >= 0) return idx + 1;
+    if (days.length === 0) return 0;
+    const last = days[days.length - 1]?.date;
+    if (!last) return 0;
+    return isAfter(now, last) ? days.length : 0;
+  }, [days, now]);
+
+  const timeRemainingText = useMemo(() => {
+    const hh = remaining.hours.toString().padStart(2, '0');
+    const mm = remaining.minutes.toString().padStart(2, '0');
+    const ss = remaining.seconds.toString().padStart(2, '0');
+    return `${remaining.days}天 ${hh}:${mm}:${ss}`;
+  }, [remaining.days, remaining.hours, remaining.minutes, remaining.seconds]);
 
   const stateMeta = useMemo(() => {
     const map: Record<BodyState, { label: string; emoji: string; dotClass: string }> =
@@ -608,7 +675,7 @@ export default function YearGrid({
         2: { label: '偏差', emoji: '😕', dotClass: 'bg-amber-400' },
         3: { label: '一般', emoji: '😐', dotClass: 'bg-zinc-400' },
         4: { label: '不错', emoji: '🙂', dotClass: 'bg-cyan-400' },
-        5: { label: '很好', emoji: '😄', dotClass: 'bg-emerald-400' }
+        5: { label: '很好', emoji: '😄', dotClass: 'bg-emerald-600' }
       };
     return map;
   }, []);
@@ -626,54 +693,7 @@ export default function YearGrid({
   }, [stateMeta]);
 
   useEffect(() => {
-    const rawEntries = localStorage.getItem('yeargrid_entries_v1');
-    const parsedEntries = safeParseJSON(rawEntries);
-    const normalizedEntries = normalizeEntries(parsedEntries);
-    if (rawEntries && parsedEntries === null) {
-      localStorage.setItem(`yeargrid_entries_v1_corrupt_${Date.now()}`, rawEntries);
-      localStorage.removeItem('yeargrid_entries_v1');
-      setStorageStatus('检测到本地 entries 数据损坏，已备份并重置。');
-    }
-
-    if (normalizedEntries) {
-      setEntries(normalizedEntries);
-    } else {
-      const rawMarks = localStorage.getItem('yeargrid_marks_v1');
-      const parsedMarks = safeParseJSON(rawMarks);
-      if (rawMarks && parsedMarks === null) {
-        localStorage.setItem(`yeargrid_marks_v1_corrupt_${Date.now()}`, rawMarks);
-        localStorage.removeItem('yeargrid_marks_v1');
-        setStorageStatus((prev) => prev ?? '检测到本地 marks 数据损坏，已备份并重置。');
-      }
-
-      if (parsedMarks && typeof parsedMarks === 'object') {
-        const next: Record<string, Entry> = {};
-        for (const [isoDate, value] of Object.entries(parsedMarks as Record<string, unknown>)) {
-          if (!value || typeof value !== 'object') continue;
-          const kind = (value as { kind?: unknown }).kind;
-          const note =
-            typeof (value as { note?: unknown }).note === 'string'
-              ? (value as { note: string }).note
-              : '';
-          const state: BodyState = kind === 'done' ? 4 : kind === 'event' ? 3 : 0;
-          if (state !== 0 || note.trim() !== '') next[isoDate] = { state, note: note.slice(0, 50) };
-        }
-        setEntries(next);
-        localStorage.setItem('yeargrid_entries_v1', JSON.stringify(next));
-        localStorage.removeItem('yeargrid_marks_v1');
-      }
-    }
-
-    setEntriesLoaded(true);
-    setGuideDismissed(localStorage.getItem('yeargrid_guide_dismissed_v1') === '1');
-  }, []);
-
-  useEffect(() => {
-    if (!entriesLoaded) return;
-    localStorage.setItem('yeargrid_entries_v1', JSON.stringify(entries));
-  }, [entries, entriesLoaded]);
-
-  useEffect(() => {
+    // Migrate legacy entries to active range if needed, or just initialize ranges with embedded entries
     const today = new Date();
     const defaultStartISO = format(startOfMonth(today), 'yyyy-MM-dd');
     const defaultEndISO = format(endOfMonth(today), 'yyyy-MM-dd');
@@ -681,79 +701,156 @@ export default function YearGrid({
       id: `range_${today.getTime()}`,
       name: '区间1',
       startISO: defaultStartISO,
-      endISO: defaultEndISO
+      endISO: defaultEndISO,
+      entries: {}
     };
 
-    let loadedRanges: SavedRange[] = [defaultRange];
+    // Load ranges first
+    let loadedRanges: SavedRange[] = [];
     const rawRanges = localStorage.getItem('yeargrid_ranges_v1');
+    const hasStoredRangesKey = rawRanges !== null;
     const parsedRanges = safeParseJSON(rawRanges);
     const normalizedRanges = normalizeRanges(parsedRanges);
-    if (rawRanges && parsedRanges === null) {
+    const isCorruptRanges = rawRanges !== null && parsedRanges === null;
+    
+    if (isCorruptRanges) {
       localStorage.setItem(`yeargrid_ranges_v1_corrupt_${Date.now()}`, rawRanges);
       localStorage.removeItem('yeargrid_ranges_v1');
       setStorageStatus((prev) => prev ?? '检测到本地 ranges 数据损坏，已备份并重置。');
     }
-    if (normalizedRanges && normalizedRanges.length > 0) {
+    
+    if (!isCorruptRanges && normalizedRanges) {
       loadedRanges = normalizedRanges;
     }
 
-    setRanges(loadedRanges);
-    setActiveRangeId(loadedRanges[0]?.id ?? null);
-    if (loadedRanges[0]) {
-      setCustomStartISO(loadedRanges[0].startISO);
-      setCustomEndISO(loadedRanges[0].endISO);
-      setRangeDraftStartISO(loadedRanges[0].startISO);
-      setRangeDraftEndISO(loadedRanges[0].endISO);
+    // Load legacy global entries
+    const rawEntries = localStorage.getItem('yeargrid_entries_v1');
+    if (rawEntries) {
+      const parsedEntries = safeParseJSON(rawEntries);
+      const normalizedEntries = normalizeEntries(parsedEntries);
+      
+      if (normalizedEntries && Object.keys(normalizedEntries).length > 0) {
+        if (loadedRanges.length === 0 && !hasStoredRangesKey && !isCorruptRanges) {
+          loadedRanges = [{ ...defaultRange, entries: normalizedEntries }];
+        } else if (
+          loadedRanges[0] &&
+          (!loadedRanges[0].entries || Object.keys(loadedRanges[0].entries).length === 0)
+        ) {
+          loadedRanges[0].entries = normalizedEntries;
+        }
+      }
+      // Consider clearing legacy entries after successful migration, 
+      // but for safety we might keep it or rename it? 
+      // Let's rename it to avoid re-reading next time if we want to be strict,
+      // but here we just read it if ranges are empty-ish.
+      // actually, let's not delete it yet to be safe.
     }
 
+    setRanges(loadedRanges);
+    setRangesLoaded(true);
+
+    // Initialize active range
     const rawPref = localStorage.getItem('yeargrid_view_pref_v1');
     const parsedPref = safeParseJSON(rawPref);
     const pref = normalizeViewPref(parsedPref);
-    if (rawPref && parsedPref === null) {
-      localStorage.setItem(`yeargrid_view_pref_v1_corrupt_${Date.now()}`, rawPref);
-      localStorage.removeItem('yeargrid_view_pref_v1');
-      setStorageStatus((prev) => prev ?? '检测到本地 view_pref 数据损坏，已备份并重置。');
-    }
-    if (pref) {
-      if (pref.mode) setViewMode(pref.mode);
-      if (pref.anchorISO) setAnchorISO(pref.anchorISO);
-
-      if (pref.activeRangeId) {
-        const found = loadedRanges.find((r) => r.id === pref.activeRangeId) ?? null;
-        if (found) {
-          setActiveRangeId(found.id);
-          setCustomStartISO(found.startISO);
-          setCustomEndISO(found.endISO);
-          setRangeDraftStartISO(found.startISO);
-          setRangeDraftEndISO(found.endISO);
-          setRangeDraftName(found.name);
-        }
-      } else if (pref.customStartISO && pref.customEndISO) {
-        setCustomStartISO(pref.customStartISO);
-        setCustomEndISO(pref.customEndISO);
-        setRangeDraftStartISO(pref.customStartISO);
-        setRangeDraftEndISO(pref.customEndISO);
-        if (pref.mode === 'range') {
-          const id = `range_${Date.now()}`;
-          const desiredName = `区间${loadedRanges.length + 1}`;
-          const name = makeUniqueRangeName(desiredName, loadedRanges);
-          const next: SavedRange = { id, name, startISO: pref.customStartISO, endISO: pref.customEndISO };
-          loadedRanges = [...loadedRanges, next];
-          setRanges(loadedRanges);
-          setActiveRangeId(id);
-          setRangeDraftName(name);
-        }
+    
+    let initialActiveId = loadedRanges[0]?.id ?? null;
+    
+    if (pref?.activeRangeId) {
+      const found = loadedRanges.find((r) => r.id === pref.activeRangeId);
+      if (found) {
+        initialActiveId = found.id;
       }
     }
 
-    setRangesLoaded(true);
+    setActiveRangeId(initialActiveId);
+    
+    if (initialActiveId) {
+      const found = loadedRanges.find(r => r.id === initialActiveId);
+      if (found) {
+        setCustomStartISO(found.startISO);
+        setCustomEndISO(found.endISO);
+        setRangeDraftStartISO(found.startISO);
+        setRangeDraftEndISO(found.endISO);
+        setRangeDraftName(found.name);
+        // Load entries for the active range into state
+        setEntries(found.entries || {});
+      }
+    } else {
+        setEntries({});
+        setCustomStartISO('');
+        setCustomEndISO('');
+        setRangeDraftStartISO('');
+        setRangeDraftEndISO('');
+        setRangeDraftName('');
+    }
+
+    if (pref) {
+      if (pref.mode) setViewMode(pref.mode);
+      if (pref.anchorISO) setAnchorISO(pref.anchorISO);
+    }
+
+    setEntriesLoaded(true); // Signal that we are ready
     setViewPrefLoaded(true);
+    setGuideDismissed(localStorage.getItem('yeargrid_guide_dismissed_v1') === '1');
   }, []);
 
+  // Sync entries back to active range and persist ranges
+  useEffect(() => {
+    if (!entriesLoaded || !rangesLoaded) return;
+    
+    setRanges(prev => {
+      // If no active range, nothing to sync entries to
+      if (!activeRangeId) return prev;
+      
+      const idx = prev.findIndex(r => r.id === activeRangeId);
+      if (idx === -1) return prev;
+
+      // Check if entries actually changed to avoid loop?
+      // Strict equality check is hard, but we can rely on React state updates.
+      // actually, we need to update the range object with new entries
+      const currentRange = prev[idx];
+      if (currentRange.entries === entries) return prev; // optimization if reference is same
+
+      const nextRanges = [...prev];
+      nextRanges[idx] = { ...currentRange, entries };
+      
+      // Persist to local storage
+      localStorage.setItem('yeargrid_ranges_v1', JSON.stringify(nextRanges));
+      return nextRanges;
+    });
+  }, [entries, activeRangeId, entriesLoaded, rangesLoaded]);
+
+  // Persist ranges when they change (other properties like name/color/dates)
+  // Note: The above effect handles entries syncing. 
+  // We also need to save ranges when `ranges` state changes due to other reasons (add/delete/rename)
+  // BUT: `setRanges` in the above effect triggers this one if we are not careful.
+  // Let's combine persistence logic or separate concerns carefully.
+  // Actually, simpler: Whenever `ranges` changes, save it.
+  useEffect(() => {
+      if (!rangesLoaded) return;
+      localStorage.setItem('yeargrid_ranges_v1', JSON.stringify(ranges));
+  }, [ranges, rangesLoaded]);
+
+  // When active range changes, load its entries
   useEffect(() => {
     if (!rangesLoaded) return;
-    localStorage.setItem('yeargrid_ranges_v1', JSON.stringify(ranges));
-  }, [ranges, rangesLoaded]);
+    if (!activeRangeId) return;
+    if (prevActiveRangeIdRef.current === activeRangeId) return;
+    prevActiveRangeIdRef.current = activeRangeId;
+
+    const found = ranges.find((r) => r.id === activeRangeId);
+    if (!found) {
+      setEntries({});
+      return;
+    }
+
+    setEntries(found.entries || {});
+    setCustomStartISO(found.startISO);
+    setCustomEndISO(found.endISO);
+    setRangeDraftStartISO(found.startISO);
+    setRangeDraftEndISO(found.endISO);
+  }, [activeRangeId, ranges, rangesLoaded]);
 
   useEffect(() => {
     if (!viewPrefLoaded) return;
@@ -780,22 +877,28 @@ export default function YearGrid({
       const availableWidth = Math.max(0, rootRect.width);
       const availableHeight = Math.max(0, rootRect.height - headerRect.height - 20);
 
-      const gap = 4;
-      const minCols = viewMode === 'year' ? 18 : 12;
+      const gap = viewMode === 'month' || viewMode === 'week' || viewMode === 'range' ? 8 : 6;
+      const minCols = 12;
       const maxCols = 48;
       const count = days.length;
 
       let bestCols = clamp(32, minCols, maxCols);
       let bestCellSize = 0;
 
-      // Fixed layout for Month and Week views
-      if (viewMode === 'month' || viewMode === 'week') {
-        bestCols = 7;
-        const idealCellSize = 52;
-        const neededWidth = bestCols * idealCellSize + (bestCols - 1) * gap;
+      if (viewMode === 'year') {
         setColumns((prev) => (prev === 7 ? prev : 7));
-        const nextMax = Math.min(availableWidth, neededWidth);
-        setGridMaxWidth((prev) => (prev === nextMax ? prev : nextMax));
+        setGridMaxWidth((prev) => (prev === undefined ? prev : undefined));
+        return;
+      }
+
+      if (viewMode === 'month' || viewMode === 'week' || viewMode === 'range') {
+        if (viewMode === 'week') {
+          bestCols = 7;
+        } else {
+          bestCols = availableWidth < 640 ? 7 : 10;
+        }
+        setColumns((prev) => (prev === bestCols ? prev : bestCols));
+        setGridMaxWidth((prev) => (prev === undefined ? prev : undefined));
         return;
       }
 
@@ -961,7 +1064,51 @@ export default function YearGrid({
   const handleCellHover = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
     const { x, y } = clampTooltipPosition(e.clientX + 12, e.clientY + 12);
     setTooltip({ day, x, y });
-  }, [clampTooltipPosition]);
+    if (isRangeEditing && isDragging) {
+      setDragCurrentISO(day.isoDate);
+    }
+  }, [clampTooltipPosition, isDragging, isRangeEditing]);
+
+  const handleCellMouseDown = useCallback(
+    (day: YearDay) => {
+      if (viewMode !== 'range') return;
+      if (!isEditingRange) return;
+      setIsDragging(true);
+      setDragStartISO(day.isoDate);
+      setDragCurrentISO(day.isoDate);
+    },
+    [isEditingRange, viewMode]
+  );
+
+  const handleCellMouseUp = useCallback(
+    (day: YearDay) => {
+      if (!isEditingRange) return;
+      if (!isDragging || !dragStartISO) return;
+      setIsDragging(false);
+      
+      const d1 = parseISO(dragStartISO);
+      const d2 = parseISO(day.isoDate);
+      const start = isBefore(d1, d2) ? dragStartISO : day.isoDate;
+      const end = isBefore(d1, d2) ? day.isoDate : dragStartISO;
+
+      if (start === end) {
+          setDragStartISO(null);
+          setDragCurrentISO(null);
+          return;
+      }
+      setRangeDraftStartISO(start);
+      setRangeDraftEndISO(end);
+
+      if (activeRangeId === null) {
+        if (!customStartISO || start < customStartISO) setCustomStartISO(start);
+        if (!customEndISO || end > customEndISO) setCustomEndISO(end);
+      }
+      
+      setDragStartISO(null);
+      setDragCurrentISO(null);
+    },
+    [activeRangeId, customEndISO, customStartISO, dragStartISO, isDragging, isEditingRange]
+  );
 
   const handleCellMove = useCallback((day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
     setTooltip((prev) => {
@@ -1028,9 +1175,10 @@ export default function YearGrid({
   }, []);
 
   const handleCellClick = useCallback((day: YearDay) => {
+    if (viewMode === 'range' && isEditingRange) return;
     setFocusedISODate(day.isoDate);
     setSelectedISODate(day.isoDate);
-  }, []);
+  }, [isEditingRange, viewMode]);
 
   const handleCellKeyDown = useCallback(
     (day: YearDay, e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1090,165 +1238,344 @@ export default function YearGrid({
     return Object.keys(entries).length === 0;
   }, [guideDismissed, entries]);
 
-  const legendItems = useMemo(
-    () => [
-      { label: `${stateMeta[1].emoji} ${stateMeta[1].label}`, dotClass: stateMeta[1].dotClass },
-      { label: `${stateMeta[2].emoji} ${stateMeta[2].label}`, dotClass: stateMeta[2].dotClass },
-      { label: `${stateMeta[3].emoji} ${stateMeta[3].label}`, dotClass: stateMeta[3].dotClass },
-      { label: `${stateMeta[4].emoji} ${stateMeta[4].label}`, dotClass: stateMeta[4].dotClass },
-      { label: `${stateMeta[5].emoji} ${stateMeta[5].label}`, dotClass: stateMeta[5].dotClass },
-      { label: '今天', dotClass: 'bg-cyan-500' }
-    ],
-    [stateMeta]
+  const gridGap = viewMode === 'month' || viewMode === 'week' || viewMode === 'range' ? 8 : 6;
+
+  const yearMonthBlocks = useMemo(() => {
+    if (viewMode !== 'year') return [];
+    const byMonth = new Map<number, YearDay[]>();
+    for (const d of days) {
+      const arr = byMonth.get(d.month);
+      if (arr) arr.push(d);
+      else byMonth.set(d.month, [d]);
+    }
+    const blocks: Array<{ month: number; offset: number; days: YearDay[] }> = [];
+    for (let m = 1; m <= 12; m += 1) {
+      const monthDays = byMonth.get(m) ?? [];
+      if (monthDays.length === 0) continue;
+      const dow = monthDays[0].date.getDay();
+      const offset = (dow + 6) % 7;
+      blocks.push({ month: m, offset, days: monthDays });
+    }
+    return blocks;
+  }, [days, viewMode]);
+
+  const startNewRange = useCallback(() => {
+    setViewMode('range');
+    beginCreateRange({ setVisibleDefault: true });
+  }, [beginCreateRange]);
+
+  const buildDayCell = useCallback(
+    (day: YearDay, variant: 'compact' | 'mini' | 'large') => {
+      const entry = entries[day.isoDate] ?? null;
+      const selected = selectedISODate === day.isoDate;
+
+      const propertyHighlightActive = effectiveHighlightThisMonth;
+      const propertyMatch =
+        !propertyHighlightActive ||
+        (effectiveHighlightThisMonth && day.month === currentMonth);
+
+      const recorded = !!entry;
+      const hasNote = !!entry?.note.trim();
+      const recordMatch =
+        recordFilter === 'all'
+          ? true
+          : recordFilter === 'recorded'
+            ? recorded
+            : !recorded;
+      const noteMatch = !noteOnly || hasNote;
+      const stateMatch =
+        stateFilters.length === 0 ? true : entry ? stateFilters.includes(entry.state) : false;
+      const q = noteQuery.trim().toLowerCase();
+      const queryMatch = !q || (hasNote && entry!.note.toLowerCase().includes(q));
+
+      const anyFilter =
+        propertyHighlightActive ||
+        recordFilter !== 'all' ||
+        noteOnly ||
+        stateFilters.length > 0 ||
+        q !== '';
+      const matches = propertyMatch && recordMatch && noteMatch && stateMatch && queryMatch;
+      const dimmed = viewMode !== 'range' && anyFilter && !matches;
+
+      // Special handling for range creation/editing:
+      // All cells are dimmed by default unless selected by drag or explicitly selected
+      // We also want to hide dots during creation/editing (implemented via entry prop below)
+      let isDragSelected = false;
+      if (isDragging && dragStartISO && dragCurrentISO) {
+        const s = dragStartISO < dragCurrentISO ? dragStartISO : dragCurrentISO;
+        const e = dragStartISO > dragCurrentISO ? dragStartISO : dragCurrentISO;
+        isDragSelected = day.isoDate >= s && day.isoDate <= e;
+      } else if (isRangeEditing && rangeDraftStartISO && rangeDraftEndISO) {
+        isDragSelected = day.isoDate >= rangeDraftStartISO && day.isoDate <= rangeDraftEndISO;
+      }
+
+      const cellThemeColor = isRangeEditing && isDragSelected ? rangeDraftColor : 'emerald';
+
+      return (
+        <DayCell
+          key={day.isoDate}
+          variant={variant}
+          dataIso={day.isoDate}
+          tabIndex={focusedISODate === day.isoDate ? 0 : -1}
+          day={day}
+          dimmed={dimmed}
+          selected={selected}
+          isDragSelected={isDragSelected}
+          forceGray={isRangeEditing && !isDragSelected}
+          // If editing range and selected/dragged, show theme color, otherwise emerald or gray
+          themeColor={cellThemeColor}
+          // Hide entries during range editing to avoid visual clutter
+          entry={isRangeEditing ? null : entry}
+          showWeekend={highlightWeekends}
+          showHoliday={highlightHolidays}
+          onHover={handleCellHover}
+          onMove={handleCellMove}
+          onLeave={handleCellLeave}
+          onFocus={handleCellFocus}
+          onBlur={handleCellBlur}
+          onKeyDown={handleCellKeyDown}
+          onClick={handleCellClick}
+          onMouseDown={handleCellMouseDown}
+          onMouseUp={handleCellMouseUp}
+        />
+      );
+    },
+    [
+      currentMonth,
+      effectiveHighlightThisMonth,
+      entries,
+      focusedISODate,
+      handleCellBlur,
+      handleCellClick,
+      handleCellFocus,
+      handleCellHover,
+      handleCellKeyDown,
+      handleCellLeave,
+      handleCellMove,
+      handleCellMouseDown,
+      handleCellMouseUp,
+      highlightHolidays,
+      highlightWeekends,
+      noteOnly,
+      noteQuery,
+      recordFilter,
+      selectedISODate,
+      stateFilters,
+      isDragging,
+      dragStartISO,
+      dragCurrentISO,
+      isRangeEditing,
+      rangeDraftColor,
+      rangeDraftStartISO,
+      rangeDraftEndISO,
+      viewMode
+    ]
   );
 
   return (
-    <div ref={rootRef} className="relative flex h-full w-full flex-col bg-zinc-50/30">
-      <header
-        ref={headerRef}
-        className="sticky top-14 z-20 mb-4 border-b border-zinc-200/60 bg-white/80 px-4 py-3 backdrop-blur-md md:mb-6"
-      >
-        {/* Top Bar: Remaining | View Switcher | Percent */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex w-24 flex-col items-start gap-0.5 md:w-32">
-            <span className="text-[10px] font-medium text-zinc-400 md:text-xs">
-              剩余时间
-            </span>
-            <div className="flex items-center gap-1 font-mono text-xs text-zinc-700 md:text-sm">
-              <span className="tabular-nums">
-                {remaining.days}d {remaining.hours}h
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center rounded-lg bg-zinc-100/80 p-1 shadow-inner">
-            {(['year', 'month', 'week', 'range'] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-all ${
-                  viewMode === m
-                    ? 'bg-white text-zinc-900 shadow-sm'
-                    : 'text-zinc-500 hover:text-zinc-700'
-                }`}
-                onClick={() => {
-                  setTooltip(null);
-                  setSelectedISODate(null);
-                  setViewMode(m);
-                  if (m === 'month' || m === 'week' || m === 'year') {
-                    setAnchorISO(format(now, 'yyyy-MM-dd'));
-                  }
-                  if (m === 'range') {
-                    const startISO = activeRange?.startISO ?? customStartISO;
-                    const endISO = activeRange?.endISO ?? customEndISO;
-                    setRangeDraftStartISO(startISO);
-                    setRangeDraftEndISO(endISO);
-                    setRangeDraftName(activeRange?.name ?? '');
-                    setIsEditingRange(false);
-                  }
-                  if (m !== 'year') setHighlightThisMonth(false);
-                }}
-              >
-                {m === 'year' ? '年' : m === 'month' ? '月' : m === 'week' ? '周' : '区间'}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex w-24 items-center justify-end gap-3 md:w-32">
-            <div className="flex flex-col items-end">
-              <div className="text-xl font-bold tracking-tight text-zinc-900 md:text-2xl">
-                {percentText}
-              </div>
-              <div className="mt-0.5 text-[10px] font-medium text-zinc-400">
-                {scopeLabel}
+    <div ref={rootRef} className="relative flex w-full flex-col">
+      <header ref={headerRef} className="mb-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col items-start gap-6 sm:flex-row sm:items-center">
+            <div className="relative">
+              <svg className="h-32 w-32 -rotate-90" viewBox="0 0 128 128">
+                <defs>
+                  <linearGradient id="ygProgressGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="rgb(5 150 105)" />
+                    <stop offset="100%" stopColor="rgb(14 116 144)" />
+                  </linearGradient>
+                </defs>
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="56"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  fill="none"
+                  className="text-zinc-200"
+                />
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="56"
+                  stroke="url(#ygProgressGradient)"
+                  strokeWidth="8"
+                  fill="none"
+                  strokeLinecap="round"
+                  className="transition-all duration-1000"
+                  strokeDasharray={`${(isCreatingRange ? (createRangePreview?.percent ?? 0) : percent) * 3.52} 352`}
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-3xl font-bold text-zinc-900">
+                  {isCreatingRange
+                    ? createRangePreview
+                      ? `${Math.floor(createRangePreview.percent).toString()}%`
+                      : '--'
+                    : percentText}
+                </span>
+                <span className="text-xs text-zinc-500">
+                  {viewMode === 'year'
+                    ? format(rangeStart, 'yyyy年')
+                    : viewMode === 'month'
+                      ? format(rangeStart, 'M月')
+                      : viewMode === 'week'
+                        ? '本周'
+                        : '区间'}
+                </span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowFilters(!showFilters)}
-              className={`rounded-full p-1.5 transition ${
-                showFilters
-                  ? 'bg-zinc-200 text-zinc-900'
-                  : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
-              }`}
-            >
-              <Filter className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
 
-        <div className="mt-3">
-          <div className="h-1.5 w-full rounded-full bg-zinc-100">
-            <div
-              className="h-1.5 rounded-full bg-zinc-900/80"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Sub-Control Bar: Navigation & Context */}
-        <div className="mt-3 flex items-center justify-center gap-4">
-          {viewMode === 'year' && (
-            <div className="flex h-8 items-center text-sm font-medium text-zinc-900">
-              {format(rangeStart, 'yyyy年')}
+            <div className="space-y-3 rounded-xl border border-zinc-200/60 bg-white p-4 shadow-sm">
+              <div>
+                <p className="text-sm text-zinc-500">剩余时间</p>
+                <p className="text-2xl font-semibold text-zinc-900 tabular-nums">
+                  {isCreatingRange ? createRangePreview?.remainingText ?? '--' : timeRemainingText}
+                </p>
+              </div>
+              <div className="flex gap-6">
+                <div>
+                  <p className="text-xs text-zinc-500">已过</p>
+                  <p className="text-lg font-medium text-emerald-600 tabular-nums">
+                    {isCreatingRange
+                      ? createRangePreview
+                        ? `${createRangePreview.elapsedDays} 天`
+                        : '--'
+                      : `${elapsedDays} 天`}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">总计</p>
+                  <p className="text-lg font-medium text-zinc-900 tabular-nums">
+                    {isCreatingRange
+                      ? createRangePreview
+                        ? `${createRangePreview.totalDays} 天`
+                        : '--'
+                      : `${days.length} 天`}
+                  </p>
+                </div>
+              </div>
+              <div className="h-2 w-48 overflow-hidden rounded-full bg-zinc-100">
+                <div
+                  className="h-full rounded-full transition-all duration-1000"
+                  style={{
+                    width: `${isCreatingRange ? (createRangePreview?.percent ?? 0) : percent}%`,
+                    background: 'linear-gradient(90deg, rgb(5 150 105), rgb(14 116 144))'
+                  }}
+                />
+              </div>
             </div>
-          )}
+          </div>
 
-          {(viewMode === 'month' || viewMode === 'week') && (
-            <div className="flex items-center gap-3 rounded-full bg-zinc-100/50 px-1 py-0.5">
-              <button
-                type="button"
-                className="rounded-full p-1 text-zinc-500 hover:bg-white hover:text-zinc-900 hover:shadow-sm"
-                onClick={() => {
-                  const next =
-                    viewMode === 'month'
-                      ? addMonths(parseISO(anchorISO), -1)
-                      : addWeeks(parseISO(anchorISO), -1);
-                  setAnchorISO(format(next, 'yyyy-MM-dd'));
-                }}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="min-w-[80px] text-center text-xs font-medium tabular-nums text-zinc-900">
-                {viewMode === 'month'
-                  ? format(rangeStart, 'yyyy年MM月')
-                  : `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`}
-              </span>
-              <button
-                type="button"
-                className="rounded-full p-1 text-zinc-500 hover:bg-white hover:text-zinc-900 hover:shadow-sm"
-                onClick={() => {
-                  const next =
-                    viewMode === 'month'
-                      ? addMonths(parseISO(anchorISO), 1)
-                      : addWeeks(parseISO(anchorISO), 1);
-                  setAnchorISO(format(next, 'yyyy-MM-dd'));
-                }}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-              <div className="mx-1 h-3 w-px bg-zinc-300/50" />
-              <button
-                type="button"
-                className="mr-1 rounded-full px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:bg-white hover:text-zinc-900 hover:shadow-sm"
-                onClick={() => setAnchorISO(format(now, 'yyyy-MM-dd'))}
-              >
-                回到当前
-              </button>
+          <div className="flex flex-col items-end gap-4">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center rounded-lg border border-zinc-200/60 bg-zinc-100/60 p-1 shadow-sm">
+                {(['year', 'month', 'week', 'range'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`rounded-md px-4 py-2 text-sm font-medium transition-all ${
+                      viewMode === m
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'text-zinc-500 hover:bg-zinc-100/80 hover:text-zinc-900'
+                    }`}
+                    onClick={() => {
+                        setTooltip(null);
+                        setSelectedISODate(null);
+                        setViewMode(m);
+                        if (m === 'month' || m === 'week' || m === 'year') {
+                          setAnchorISO(format(now, 'yyyy-MM-dd'));
+                        }
+                        if (m === 'range') {
+                          const startISO = activeRange?.startISO ?? customStartISO;
+                          const endISO = activeRange?.endISO ?? customEndISO;
+                          setRangeDraftStartISO(startISO);
+                          setRangeDraftEndISO(endISO);
+                          setRangeDraftName(activeRange?.name ?? '');
+                          setIsEditingRange(false);
+                        }
+                        if (m !== 'year') setHighlightThisMonth(false);
+                      }}
+                    >
+                      {m === 'year' ? '年' : m === 'month' ? '月' : m === 'week' ? '周' : '区间'}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`rounded-lg border p-2.5 transition-all ${
+                    showFilters
+                      ? 'border-emerald-600 bg-emerald-600 text-white shadow-md'
+                      : 'border-zinc-200/60 bg-white text-zinc-500 shadow-sm hover:border-emerald-600/50 hover:text-zinc-900'
+                  }`}
+                >
+                  <Filter className="h-4 w-4" />
+                </button>
             </div>
-          )}
 
-          {viewMode === 'range' && (
-            <div className="flex flex-col items-center gap-2">
-              <div className="flex items-center gap-2">
-                <div className="scrollbar-hide flex max-w-[240px] items-center gap-1.5 overflow-x-auto px-1 md:max-w-[400px]">
-                  {ranges.map((r) => {
-                    const active = r.id === activeRangeId;
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        onClick={() => {
+            {/* Sub-Control Bar: Navigation & Context */}
+            <div className="flex items-center justify-end gap-4">
+              {viewMode === 'year' && (
+                <div className="flex h-10 items-center rounded-lg border border-zinc-200/60 bg-white px-4 text-sm font-medium text-zinc-900 shadow-sm">
+                  {format(rangeStart, 'yyyy年')}
+                </div>
+              )}
+
+              {(viewMode === 'month' || viewMode === 'week') && (
+                <div className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-zinc-100/60 p-1 shadow-sm">
+                  <button
+                    type="button"
+                    className="rounded-md p-2 text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
+                    onClick={() => {
+                      const next =
+                        viewMode === 'month'
+                          ? addMonths(parseISO(anchorISO), -1)
+                          : addWeeks(parseISO(anchorISO), -1);
+                      setAnchorISO(format(next, 'yyyy-MM-dd'));
+                    }}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <span className="min-w-[132px] px-1 text-center text-sm font-medium tabular-nums text-zinc-900">
+                    {viewMode === 'month'
+                      ? format(rangeStart, 'yyyy年MM月')
+                      : `${format(rangeStart, 'MM.dd')} - ${format(rangeEnd, 'MM.dd')}`}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-md p-2 text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
+                    onClick={() => {
+                      const next =
+                        viewMode === 'month'
+                          ? addMonths(parseISO(anchorISO), 1)
+                          : addWeeks(parseISO(anchorISO), 1);
+                      setAnchorISO(format(next, 'yyyy-MM-dd'));
+                    }}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                  <div className="mx-1 h-5 w-px bg-zinc-200" />
+                  <button
+                    type="button"
+                    className="rounded-md px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
+                    onClick={() => setAnchorISO(format(now, 'yyyy-MM-dd'))}
+                  >
+                    回到当前
+                  </button>
+                </div>
+              )}
+
+              {viewMode === 'range' && (ranges.length > 0 || isEditingRange) && (
+                <div className="relative flex flex-col items-center gap-2">
+                  <div className="flex items-center gap-2">
+                    <RangeSelector
+                      ranges={ranges}
+                      activeRangeId={activeRangeId}
+                      onSelect={(id) => {
+                        const r = ranges.find((item) => item.id === id);
+                        if (r) {
                           setActiveRangeId(r.id);
                           setCustomStartISO(r.startISO);
                           setCustomEndISO(r.endISO);
@@ -1256,219 +1583,287 @@ export default function YearGrid({
                           setRangeDraftEndISO(r.endISO);
                           setRangeDraftName(r.name);
                           setIsEditingRange(false);
-                        }}
-                        className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs transition-all ${
-                          active
-                            ? 'bg-zinc-800 font-medium text-zinc-50 shadow-sm'
-                            : 'bg-white text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-50 hover:text-zinc-900'
-                        }`}
-                      >
-                        {r.name}
-                      </button>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    onClick={addNewRangeFromDraft}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-
-                <div className="h-4 w-px bg-zinc-200" />
-
-                <button
-                  type="button"
-                  onClick={() => setIsEditingRange(!isEditingRange)}
-                  className={`rounded-full p-1.5 transition ${
-                    isEditingRange
-                      ? 'bg-zinc-200 text-zinc-900'
-                      : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
-                  }`}
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              {isEditingRange && (
-                <div className="absolute top-full z-30 mt-1 flex animate-in fade-in slide-in-from-top-2 flex-col gap-2 rounded-xl border border-zinc-200/60 bg-white/90 p-2 shadow-lg backdrop-blur-xl">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={activeRangeIndex <= 0}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
-                      onClick={() => moveActiveRange(-1)}
-                      title="左移"
-                    >
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={activeRangeIndex < 0 || activeRangeIndex >= ranges.length - 1}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
-                      onClick={() => moveActiveRange(1)}
-                      title="右移"
-                    >
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </button>
-                    <div className="h-4 w-px bg-zinc-200" />
-                    <input
-                      type="text"
-                      className="w-[10ch] rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                      placeholder="名称"
-                      value={rangeDraftName}
-                      onChange={(e) => setRangeDraftName(e.target.value)}
-                    />
-                    <div className="h-4 w-px bg-zinc-200" />
-                    <input
-                      type="date"
-                      className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                      value={rangeDraftStartISO}
-                      onChange={(e) => setRangeDraftStartISO(e.target.value)}
-                    />
-                    <span className="text-zinc-300">-</span>
-                    <input
-                      type="date"
-                      className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-900 outline-none focus:border-zinc-300"
-                      value={rangeDraftEndISO}
-                      onChange={(e) => setRangeDraftEndISO(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      disabled={!rangeDraftValid || !activeRangeId}
-                      className="ml-1 flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-white shadow-sm hover:bg-zinc-700 disabled:bg-zinc-200"
-                      onClick={() => {
-                        applyRangeDraftToActive();
-                        setIsEditingRange(false);
+                        }
                       }}
-                      title="保存"
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                    </button>
+                      onAdd={() => {
+                        beginCreateRange({ setVisibleDefault: true });
+                      }}
+                      onEdit={(r) => {
+                        setActiveRangeId(r.id); // Ensure we are editing the right one
+                        setRangeDraftName(r.name);
+                        setRangeDraftStartISO(r.startISO);
+                        setRangeDraftEndISO(r.endISO);
+                        setRangeDraftColor(r.color || 'emerald');
+                        setIsEditingRange(true);
+                        setRangeDraftSaving(false);
+                      }}
+                      onDelete={(id) => {
+                         // We need to implement delete by ID, currently deleteActiveRange deletes the active one
+                         if (id === activeRangeId) {
+                            deleteActiveRange();
+                         } else {
+                            // Temporary: switch to it then delete (hacky but safe for MVP with existing logic)
+                            // Or better: refactor deleteActiveRange to accept ID. 
+                            // For MVP, let's just use the existing logic which relies on activeRangeId
+                            // If user deletes non-active, we might need to switch state.
+                            // Actually RangeSelector's delete button on active item is enough for now.
+                            // If I click delete on a dropdown item that is NOT active, I should warn or switch.
+                            // Let's keep it simple: Select it first then delete logic runs.
+                            const index = ranges.findIndex(r => r.id === id);
+                            if (index >= 0) {
+                                const nextRanges = ranges.filter(r => r.id !== id);
+                                setRanges(nextRanges);
+                                if (activeRangeId === id) {
+                                    const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
+                                    setActiveRangeId(nextActive?.id ?? null);
+                                    if (nextActive) {
+                                        setCustomStartISO(nextActive.startISO);
+                                        setCustomEndISO(nextActive.endISO);
+                                    }
+                                }
+                            }
+                         }
+                      }}
+                      onDuplicate={(id) => {
+                          const r = ranges.find(item => item.id === id);
+                          if (!r) return;
+                          const newId = `range_${Date.now()}`;
+                          const desired = `${r.name} 副本`;
+                          const name = makeUniqueRangeName(desired, ranges);
+                          const next = { ...r, id: newId, name };
+                          setRanges(prev => [...prev, next]);
+                          // Switch to new
+                          setActiveRangeId(newId);
+                          setCustomStartISO(next.startISO);
+                          setCustomEndISO(next.endISO);
+                      }}
+                    />
+
+                    <div className="h-4 w-px bg-zinc-200" />
+
                     <button
                       type="button"
-                      disabled={!activeRangeId}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
-                      onClick={duplicateActiveRange}
-                      title="复制当前区间"
+                      onClick={() => setIsEditingRange(!isEditingRange)}
+                      className={`rounded-lg border p-2.5 transition-all ${
+                        isEditingRange
+                          ? 'border-emerald-600 bg-emerald-600 text-white shadow-md'
+                          : 'border-zinc-200/60 bg-white text-zinc-500 shadow-sm hover:border-emerald-600/50 hover:text-zinc-900'
+                      }`}
+                      title="区间设置"
                     >
-                      <Copy className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!activeRangeId || ranges.length <= 1}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 disabled:opacity-40"
-                      onClick={deleteActiveRange}
-                      title={ranges.length <= 1 ? '至少保留一个区间' : '删除当前区间'}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Settings2 className="h-4 w-4" />
                     </button>
                   </div>
 
-                  {(rangeDraftNameDuplicate || rangeDraftOverlapWith) && (
-                    <div className="flex flex-col gap-1 px-1 text-[10px] text-amber-600">
-                      {rangeDraftNameDuplicate && <div>名称与其他区间重复</div>}
-                      {rangeDraftOverlapWith && (
-                        <div>与“{rangeDraftOverlapWith}”时间重叠</div>
+                  {isEditingRange && (
+                    <div className="absolute top-full right-0 z-30 mt-2 flex w-[600px] max-w-[90vw] flex-col gap-4 rounded-xl border border-zinc-200/60 bg-white p-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          type="text"
+                          className="h-10 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-emerald-600/40 focus:ring-2 focus:ring-emerald-600/15"
+                          placeholder="名称"
+                          value={rangeDraftName}
+                          onChange={(e) => setRangeDraftName(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-3 px-1">
+                         <span className="text-sm font-medium text-zinc-500">主题色</span>
+                         <div className="flex items-center gap-2">
+                            {['emerald', 'blue', 'rose', 'amber', 'violet', 'cyan'].map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => setRangeDraftColor(c as ThemeColor)}
+                                className={`h-6 w-6 rounded-full border border-white shadow-sm ring-1 ring-inset transition-transform ${
+                                   rangeDraftColor === c ? 'ring-zinc-900 scale-110' : 'ring-zinc-200 hover:scale-105'
+                                } ${
+                                  c === 'emerald' ? 'bg-emerald-500' :
+                                  c === 'blue' ? 'bg-blue-500' :
+                                  c === 'rose' ? 'bg-rose-500' :
+                                  c === 'amber' ? 'bg-amber-500' :
+                                  c === 'violet' ? 'bg-violet-500' :
+                                  'bg-cyan-500'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="flex flex-1 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50/50 p-1">
+                            <input
+                              type="date"
+                              className="h-9 w-full min-w-0 bg-transparent px-2 text-sm text-zinc-900 outline-none"
+                              value={rangeDraftStartISO}
+                              onChange={(e) => {
+                                const nextStart = e.target.value;
+                                setRangeDraftStartISO(nextStart);
+                                if (activeRangeId === null && isRangeEditing && nextStart) {
+                                  if (!customStartISO || nextStart < customStartISO) setCustomStartISO(nextStart);
+                                  if (rangeDraftEndISO && (!customEndISO || rangeDraftEndISO > customEndISO)) {
+                                    setCustomEndISO(rangeDraftEndISO);
+                                  }
+                                }
+                              }}
+                            />
+                            <span className="text-zinc-400">-</span>
+                            <input
+                              type="date"
+                              className="h-9 w-full min-w-0 bg-transparent px-2 text-sm text-zinc-900 outline-none"
+                              value={rangeDraftEndISO}
+                              onChange={(e) => {
+                                const nextEnd = e.target.value;
+                                setRangeDraftEndISO(nextEnd);
+                                if (activeRangeId === null && isRangeEditing && nextEnd) {
+                                  if (!customEndISO || nextEnd > customEndISO) setCustomEndISO(nextEnd);
+                                  if (rangeDraftStartISO && (!customStartISO || rangeDraftStartISO < customStartISO)) {
+                                    setCustomStartISO(rangeDraftStartISO);
+                                  }
+                                }
+                              }}
+                            />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!rangeDraftValid || rangeDraftSaving}
+                          className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-6 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:bg-zinc-100 disabled:text-zinc-400"
+                          onClick={() => {
+                            if (rangeDraftSaving) return;
+                            setRangeDraftSaving(true);
+                            applyRangeDraftToActive();
+                            setIsEditingRange(false);
+                          }}
+                          title="保存"
+                        >
+                          <Check className="h-4 w-4" />
+                          保存
+                        </button>
+                        {activeRangeId === null && (
+                          <button
+                            type="button"
+                            disabled={rangeDraftSaving}
+                            className="flex h-11 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-40"
+                            onClick={cancelCreateRange}
+                            title="取消创建"
+                          >
+                            <X className="h-4 w-4" />
+                            取消
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={!activeRangeId || ranges.length <= 1}
+                          className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-40"
+                          onClick={deleteActiveRange}
+                          title={ranges.length <= 1 ? '至少保留一个区间' : '删除'}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      
+                      {activeRangeId === null && rangeDraftStartISO === '' && rangeDraftEndISO === '' && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                          <div className="flex items-start gap-2">
+                            <MousePointer2 className="mt-0.5 h-4 w-4 text-amber-700" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-amber-900">拖拽选择时间</div>
+                              <div className="mt-0.5 text-[11px] leading-4 text-amber-900/80">
+                                在日历上按住鼠标拖拽，可自动填入开始/结束日期。
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
                 </div>
               )}
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Collapsible Filters & Legend */}
+        {/* Collapsible Filters */}
         {showFilters && (
-          <div className="mt-4 animate-in fade-in slide-in-from-top-2 border-t border-zinc-100 pt-4">
-            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3">
-              {/* Filters */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-400">
-                  过滤
+          <div className="mb-6 mt-6 rounded-xl border border-zinc-200/60 bg-white p-4 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-sm font-medium text-zinc-900">筛选选项</div>
+              <button
+                type="button"
+                className="text-zinc-400 transition-colors hover:text-zinc-700"
+                onClick={() => setShowFilters(false)}
+                aria-label="关闭筛选"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-6">
+              <label className="group flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={highlightWeekends}
+                  onChange={(e) => setHighlightWeekends(e.target.checked)}
+                  className="h-4 w-4 cursor-pointer rounded border-zinc-300 bg-white accent-emerald-600"
+                />
+                <span className="cursor-pointer text-sm text-zinc-900 transition-colors group-hover:text-emerald-700">
+                  显示周末
                 </span>
-                <button
-                  type="button"
-                  aria-pressed={highlightWeekends}
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                    highlightWeekends
-                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                  }`}
-                  onClick={() => setHighlightWeekends((v) => !v)}
+              </label>
+
+              <label className="group flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={highlightHolidays}
+                  onChange={(e) => setHighlightHolidays(e.target.checked)}
+                  className="h-4 w-4 cursor-pointer rounded border-zinc-300 bg-white accent-emerald-600"
+                />
+                <span className="cursor-pointer text-sm text-zinc-900 transition-colors group-hover:text-emerald-700">
+                  显示节假日
+                </span>
+              </label>
+
+              {viewMode === 'year' && (
+                <label className="group flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={highlightThisMonth}
+                    onChange={(e) => setHighlightThisMonth(e.target.checked)}
+                    className="h-4 w-4 cursor-pointer rounded border-zinc-300 bg-white accent-emerald-600"
+                  />
+                  <span className="cursor-pointer text-sm text-zinc-900 transition-colors group-hover:text-emerald-700">
+                    高亮本月
+                  </span>
+                </label>
+              )}
+
+              <label className="group flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={noteOnly}
+                  onChange={(e) => setNoteOnly(e.target.checked)}
+                  className="h-4 w-4 cursor-pointer rounded border-zinc-300 bg-white accent-emerald-600"
+                />
+                <span className="cursor-pointer text-sm text-zinc-900 transition-colors group-hover:text-emerald-700">
+                  仅有备注
+                </span>
+              </label>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-zinc-500">记录:</span>
+                <select
+                  value={recordFilter}
+                  onChange={(e) => setRecordFilter(e.target.value as typeof recordFilter)}
+                  className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-900 outline-none transition focus:border-emerald-600/40 focus:ring-2 focus:ring-emerald-600/15"
                 >
-                  周末
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={highlightHolidays}
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                    highlightHolidays
-                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                  }`}
-                  onClick={() => setHighlightHolidays((v) => !v)}
-                >
-                  节日
-                </button>
-                {viewMode === 'year' && (
-                  <button
-                    type="button"
-                    aria-pressed={highlightThisMonth}
-                    className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                      highlightThisMonth
-                        ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                        : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                    }`}
-                    onClick={() => setHighlightThisMonth((v) => !v)}
-                  >
-                    本月
-                  </button>
-                )}
-                <div className="h-4 w-px bg-zinc-200" />
-                <button
-                  type="button"
-                  aria-pressed={recordFilter === 'recorded'}
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                    recordFilter === 'recorded'
-                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                  }`}
-                  onClick={() =>
-                    setRecordFilter((v) => (v === 'recorded' ? 'all' : 'recorded'))
-                  }
-                >
-                  已记录
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={recordFilter === 'unrecorded'}
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                    recordFilter === 'unrecorded'
-                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                  }`}
-                  onClick={() =>
-                    setRecordFilter((v) => (v === 'unrecorded' ? 'all' : 'unrecorded'))
-                  }
-                >
-                  未记录
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={noteOnly}
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] transition ${
-                    noteOnly
-                      ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                      : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
-                  }`}
-                  onClick={() => setNoteOnly((v) => !v)}
-                >
-                  有备注
-                </button>
-                <div className="h-4 w-px bg-zinc-200" />
+                  <option value="all">全部</option>
+                  <option value="recorded">已记录</option>
+                  <option value="unrecorded">未记录</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-zinc-500">体感:</span>
                 <div className="flex items-center gap-1">
                   {([1, 2, 3, 4, 5] as const).map((s) => {
                     const active = stateFilters.includes(s);
@@ -1477,10 +1872,10 @@ export default function YearGrid({
                         key={s}
                         type="button"
                         aria-pressed={active}
-                        className={`rounded-full border px-2 py-0.5 text-[10px] transition ${
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm transition-colors ${
                           active
-                            ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
-                            : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50'
+                            ? 'border-emerald-600 bg-emerald-600 text-white'
+                            : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
                         }`}
                         onClick={() => toggleStateFilter(s)}
                         title={stateMeta[s].label}
@@ -1490,17 +1885,23 @@ export default function YearGrid({
                     );
                   })}
                 </div>
-                <div className="h-4 w-px bg-zinc-200" />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-zinc-500">备注:</span>
                 <input
                   type="text"
-                  className="h-6 w-[18ch] rounded-md border border-zinc-200 bg-white px-2 text-[10px] text-zinc-900 outline-none focus:border-zinc-300"
+                  className="w-[18ch] rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-900 outline-none transition focus:border-emerald-600/40 focus:ring-2 focus:ring-emerald-600/15"
                   placeholder="搜备注"
                   value={noteQuery}
                   onChange={(e) => setNoteQuery(e.target.value)}
                 />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  className="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
                   onClick={() => {
                     setHighlightWeekends(false);
                     setHighlightHolidays(false);
@@ -1515,18 +1916,18 @@ export default function YearGrid({
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
                   onClick={exportData}
                 >
-                  <Download className="h-3 w-3" />
+                  <Download className="h-4 w-4" />
                   导出
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-50"
+                  className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
                   onClick={triggerImport}
                 >
-                  <Upload className="h-3 w-3" />
+                  <Upload className="h-4 w-4" />
                   导入
                 </button>
                 <input
@@ -1537,23 +1938,11 @@ export default function YearGrid({
                   onChange={onImportFileChange}
                 />
               </div>
-
-              <div className="h-4 w-px bg-zinc-200" />
-
-              {/* Legend */}
-              <div className="flex items-center gap-3">
-                {legendItems.map((item) => (
-                  <div key={item.label} className="flex items-center gap-1.5">
-                    <span className={`h-1.5 w-1.5 rounded-full ${item.dotClass}`} />
-                    <span className="text-[10px] text-zinc-500">{item.label}</span>
-                  </div>
-                ))}
-              </div>
             </div>
             {(storageStatus || ioStatus) && (
               <div className="mt-3 flex items-center justify-center">
                 <div
-                  className={`rounded-full border px-3 py-1 text-[10px] ${
+                  className={`rounded-full border px-3 py-1 text-xs ${
                     (ioStatus?.kind ?? 'ok') === 'error'
                       ? 'border-rose-200 bg-rose-50 text-rose-700'
                       : 'border-zinc-200 bg-white text-zinc-600'
@@ -1591,83 +1980,143 @@ export default function YearGrid({
           </div>
         )}
       </header>
+      
+      {/* 主内容区域：承载不同视图（年 / 月 / 周 / 区间）的网格 */}
+      <div className="w-full pb-12">
+        {viewMode === 'range' && ranges.length === 0 && !isEditingRange ? (
+          /* Empty State */
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 py-24 text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+              <Plus className="h-8 w-8" />
+            </div>
+            <h3 className="mb-2 text-lg font-medium text-zinc-900">开始你的第一个区间</h3>
+            <p className="mb-6 max-w-sm text-sm text-zinc-500">
+              区间可以是一段旅行、一个项目周期、或者任何你想特别标记的时间段。
+            </p>
+            <button
+              type="button"
+              onClick={startNewRange}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:bg-emerald-600 hover:shadow-md active:scale-[0.98]"
+            >
+              <Plus className="h-4 w-4" />
+              创建新区间
+            </button>
+          </div>
+        ) : (
+        /* 重点卡片：标题 + 网格（年视图为 12 个月块；其他视图为连续日网格） */
+        <div className="w-full rounded-2xl border border-zinc-200/60 bg-white p-6 shadow-sm">
+          <div className="mb-6">
+            {viewMode === 'range' && activeRange ? (
+              <div className="space-y-4">
+                <div className="flex justify-end">
+                  <Legend
+                    showWeekends={highlightWeekends}
+                    onToggleWeekends={() => setHighlightWeekends(!highlightWeekends)}
+                    showHolidays={highlightHolidays}
+                    onToggleHolidays={() => setHighlightHolidays(!highlightHolidays)}
+                  />
+                </div>
 
-      <div className="flex w-full flex-1 justify-center overflow-y-auto px-4 pb-4">
-        <div
-          ref={gridRef}
-          role="grid"
-          aria-label={
-            viewMode === 'year'
-              ? '本年度每天网格'
-              : viewMode === 'month'
-              ? '本月每天网格'
-              : viewMode === 'week'
-              ? '本周每天网格'
-              : '区间每天网格'
-          }
-          className="grid h-fit w-full"
-          style={{
-            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            gap: 4,
-            maxWidth: gridMaxWidth ? `${gridMaxWidth}px` : '100%'
-          }}
-        >
-          {days.map((day) => {
-            const entry = entries[day.isoDate] ?? null;
-            const selected = selectedISODate === day.isoDate;
+                {!isEditingRange && <RangeProgressHeader range={activeRange} now={now} />}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="text-xl font-semibold text-zinc-900">
+                  {viewMode === 'year'
+                    ? format(rangeStart, 'yyyy年')
+                    : viewMode === 'month'
+                      ? format(rangeStart, 'M月')
+                      : viewMode === 'week'
+                        ? '本周'
+                        : activeRange?.name?.trim() || '区间'}
+                </div>
+                <Legend
+                  showWeekends={highlightWeekends}
+                  onToggleWeekends={() => setHighlightWeekends(!highlightWeekends)}
+                  showHolidays={highlightHolidays}
+                  onToggleHolidays={() => setHighlightHolidays(!highlightHolidays)}
+                />
+              </div>
+            )}
+          </div>
 
-            const propertyHighlightActive =
-              highlightWeekends || highlightHolidays || effectiveHighlightThisMonth;
-            const propertyMatch =
-              !propertyHighlightActive ||
-              (highlightWeekends && day.isWeekend) ||
-              (highlightHolidays && !!day.holiday) ||
-              (effectiveHighlightThisMonth && day.month === currentMonth);
-
-            const recorded = !!entry;
-            const hasNote = !!entry?.note.trim();
-            const recordMatch =
-              recordFilter === 'all'
-                ? true
-                : recordFilter === 'recorded'
-                  ? recorded
-                  : !recorded;
-            const noteMatch = !noteOnly || hasNote;
-            const stateMatch =
-              stateFilters.length === 0 ? true : entry ? stateFilters.includes(entry.state) : false;
-            const q = noteQuery.trim().toLowerCase();
-            const queryMatch = !q || (hasNote && entry!.note.toLowerCase().includes(q));
-
-            const anyFilter =
-              propertyHighlightActive ||
-              recordFilter !== 'all' ||
-              noteOnly ||
-              stateFilters.length > 0 ||
-              q !== '';
-            const matches = propertyMatch && recordMatch && noteMatch && stateMatch && queryMatch;
-            const dimmed = anyFilter && !matches;
-
-            return (
-              <DayCell
-                key={day.isoDate}
-                dataIso={day.isoDate}
-                tabIndex={focusedISODate === day.isoDate ? 0 : -1}
-                day={day}
-                dimmed={dimmed}
-                selected={selected}
-                entry={entry}
-                onHover={handleCellHover}
-                onMove={handleCellMove}
-                onLeave={handleCellLeave}
-                onFocus={handleCellFocus}
-                onBlur={handleCellBlur}
-                onKeyDown={handleCellKeyDown}
-                onClick={handleCellClick}
-              />
-            );
-          })}
+          {viewMode === 'year' ? (
+            /* 年视图：按月分组的 12 个小网格（mini 单元格），用于总览 */
+            <div
+              ref={gridRef}
+              className="grid h-fit w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+            >
+              {yearMonthBlocks.map((block) => {
+                return (
+                  /* 单个月块：7 列网格 + 前后补位，确保星期对齐 */
+                  <div
+                    key={block.month}
+                    className="space-y-2 rounded-xl p-3 transition-colors hover:bg-zinc-100/70"
+                  >
+                    <div className="text-sm font-medium text-emerald-600">{block.month}月</div>
+                    <div role="grid" aria-label={`${block.month}月`} className="grid w-full grid-cols-7 gap-1">
+                      {/* 月初补位：让 1 号对齐到正确的星期列 */}
+                      {Array.from({ length: block.offset }).map((_, i) => (
+                        <div
+                          key={`spacer_${block.month}_${i}`}
+                          aria-hidden="true"
+                          className="aspect-square w-full"
+                        />
+                      ))}
+                      {/* 当月日期：使用 mini 单元格 */}
+                      {block.days.map((d) => buildDayCell(d, 'mini'))}
+                      {/* 月末补位：补齐最后一行的 7 列 */}
+                      {Array.from({
+                        length: (() => {
+                          const used = block.offset + block.days.length;
+                          const rem = used % 7;
+                          return rem === 0 ? 0 : 7 - rem;
+                        })()
+                      }).map((_, i) => (
+                        <div
+                          key={`tail_${block.month}_${i}`}
+                          aria-hidden="true"
+                          className="aspect-square w-full"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* 月/周/区间视图：连续日网格（large 单元格），列数由响应式计算控制 */
+            <div
+              ref={gridRef}
+              role="grid"
+              aria-label={
+                viewMode === 'month'
+                  ? '本月每天网格'
+                  : viewMode === 'week'
+                    ? '本周每天网格'
+                    : '区间每天网格'
+              }
+              className="grid h-fit w-full"
+              style={{
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                gap: gridGap,
+                maxWidth: gridMaxWidth ? `${gridMaxWidth}px` : '100%'
+              }}
+            >
+              {/* 当前范围内每天：月/周/区间使用 large 单元格，便于展示日期/节日文本 */}
+              {days.map((day) =>
+                buildDayCell(
+                  day,
+                  viewMode === 'month' || viewMode === 'week' || viewMode === 'range'
+                    ? 'large'
+                    : 'compact'
+                )
+              )}
+            </div>
+          )}
+        </div>
+      )}
       </div>
-    </div>
 
       {tooltip ? (
         <div
