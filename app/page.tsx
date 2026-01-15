@@ -1,7 +1,7 @@
 import YearGrid from '@/components/YearGrid';
 import { getSolarDateFromLunar, getSolarTerms } from 'chinese-days';
 
-export const dynamic = 'force-dynamic';
+export const revalidate = 3600;
 
 function getHolidaysForYear(year: number) {
   const holidays: Record<string, string> = {
@@ -40,7 +40,7 @@ export default function HomePage() {
   const holidays = getHolidaysAroundYear(initialNow.getFullYear());
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <main className="app-container py-8">
       <YearGrid holidays={holidays} initialNowISO={initialNowISO} />
     </main>
   );

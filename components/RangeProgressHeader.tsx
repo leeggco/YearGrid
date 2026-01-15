@@ -3,24 +3,15 @@
 import { useMemo } from "react";
 import { differenceInCalendarDays, format, isAfter, isBefore, startOfDay, parseISO, endOfDay, differenceInSeconds } from "date-fns";
 import { motion } from "framer-motion";
-import { SavedRange } from "./RangeSelector";
+import { SavedRange, themeTokens } from "./RangeSelector";
 
 interface RangeProgressHeaderProps {
   range: SavedRange;
   now: Date;
 }
 
-const themeStyles: Record<string, { bg: string, text: string, bar: string[], tag: string }> = {
-  emerald: { bg: "bg-emerald-50", text: "text-emerald-600", bar: ["from-emerald-500", "to-teal-400"], tag: "bg-emerald-50 text-emerald-600" },
-  blue: { bg: "bg-blue-50", text: "text-blue-600", bar: ["from-blue-500", "to-cyan-400"], tag: "bg-blue-50 text-blue-600" },
-  rose: { bg: "bg-rose-50", text: "text-rose-600", bar: ["from-rose-500", "to-pink-400"], tag: "bg-rose-50 text-rose-600" },
-  amber: { bg: "bg-amber-50", text: "text-amber-600", bar: ["from-amber-500", "to-orange-400"], tag: "bg-amber-50 text-amber-600" },
-  violet: { bg: "bg-violet-50", text: "text-violet-600", bar: ["from-violet-500", "to-purple-400"], tag: "bg-violet-50 text-violet-600" },
-  cyan: { bg: "bg-cyan-50", text: "text-cyan-600", bar: ["from-cyan-500", "to-sky-400"], tag: "bg-cyan-50 text-cyan-600" },
-};
-
 export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
-  const theme = themeStyles[range.color || 'emerald'] || themeStyles.emerald;
+  const theme = themeTokens[range.color || "emerald"] || themeTokens.emerald;
   const stats = useMemo(() => {
     if (!range.startISO || !range.endISO) return null;
 
@@ -92,7 +83,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
             {range.name}
             {stats.isEnded && <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 font-medium">已结束</span>}
             {stats.isUpcoming && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">未开始</span>}
-            {!stats.isEnded && !stats.isUpcoming && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${theme.tag}`}>进行中</span>}
+            {!stats.isEnded && !stats.isUpcoming && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${theme.progressTag}`}>进行中</span>}
           </h2>
           <div className="text-sm text-zinc-500 mt-1 font-medium tabular-nums">
             {stats.formattedStart} - {stats.formattedEnd}
@@ -106,7 +97,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
             {!stats.isUpcoming && !stats.isEnded && (
                 <div className="text-right">
                     <div className="text-sm text-zinc-500">已过</div>
-                    <div className="text-2xl font-bold text-emerald-600 tabular-nums">{stats.daysPassed}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
+                    <div className={`text-2xl font-bold tabular-nums ${theme.progressText}`}>{stats.daysPassed}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
                 </div>
             )}
             {!stats.isUpcoming && !stats.isEnded && (
@@ -127,7 +118,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
       {/* Progress Bar */}
       <div className="relative h-4 w-full overflow-hidden rounded-full bg-zinc-100">
         <motion.div
-          className={`absolute inset-y-0 left-0 bg-gradient-to-r ${theme.bar[0]} ${theme.bar[1]}`}
+          className={`absolute inset-y-0 left-0 bg-gradient-to-r ${theme.progressBarFrom} ${theme.progressBarTo}`}
           initial={{ width: 0 }}
           animate={{ width: `${stats.progressPercent}%` }}
           transition={{ duration: 1, ease: "easeOut" }}
@@ -138,7 +129,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
       {/* Percentage Label */}
       <div className="flex justify-between text-xs font-medium text-zinc-400 mt-[-16px]">
         <span>0%</span>
-        <span className="text-emerald-600 tabular-nums">{stats.progressPercent.toFixed(3)}%</span>
+        <span className={`tabular-nums ${theme.progressText}`}>{stats.progressPercent.toFixed(3)}%</span>
         <span>100%</span>
       </div>
     </div>

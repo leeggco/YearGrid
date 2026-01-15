@@ -1,4 +1,5 @@
 const path = require('path');
+const os = require('os');
 
 const nextConfig = {
   reactStrictMode: true,

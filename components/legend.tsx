@@ -1,5 +1,3 @@
-'use client';
-
 interface LegendProps {
   showWeekends?: boolean;
   onToggleWeekends?: () => void;

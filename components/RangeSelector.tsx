@@ -4,15 +4,118 @@ import { useState, useRef, useEffect } from "react";
 import { ChevronDown, Plus, Check, Trash2, Copy, Settings2 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
-export type ThemeColor = 'emerald' | 'blue' | 'rose' | 'amber' | 'violet' | 'cyan';
+import { ThemeColor, SavedRange } from '@/lib/types';
 
-export type SavedRange = {
-  id: string;
-  name: string;
-  startISO: string;
-  endISO: string;
-  color?: ThemeColor;
-  entries?: Record<string, { state: 0 | 1 | 2 | 3 | 4 | 5; note: string }>;
+export { type ThemeColor, type SavedRange };
+
+export const themeTokens: Record<
+  ThemeColor,
+  {
+    dotBg: string;
+    progressBg: string;
+    progressText: string;
+    progressBarFrom: string;
+    progressBarTo: string;
+    progressTag: string;
+    dayToday: string;
+    dayMarked: string;
+    dayPast: string;
+    dayFuture: string;
+    dayRing: string;
+    dayShadow: string;
+    dayFocusOutline: string;
+  }
+> = {
+  emerald: {
+    dotBg: "bg-emerald-500",
+    progressBg: "bg-emerald-50",
+    progressText: "text-emerald-600",
+    progressBarFrom: "from-emerald-500",
+    progressBarTo: "to-teal-400",
+    progressTag: "bg-emerald-50 text-emerald-600",
+    dayToday: "bg-[#009C7B] text-white",
+    dayMarked: "bg-[#7BC27E] text-zinc-900",
+    dayPast: "bg-[#D8E9E4] text-zinc-700",
+    dayFuture: "bg-[#EEF3F4] border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-[#009C7B]/30",
+    dayShadow: "shadow-[#009C7B]/25",
+    dayFocusOutline: "focus-visible:outline-[#009C7B]/40",
+  },
+  blue: {
+    dotBg: "bg-blue-500",
+    progressBg: "bg-blue-50",
+    progressText: "text-blue-600",
+    progressBarFrom: "from-blue-500",
+    progressBarTo: "to-cyan-400",
+    progressTag: "bg-blue-50 text-blue-600",
+    dayToday: "bg-blue-600 text-white",
+    dayMarked: "bg-blue-300 text-zinc-900",
+    dayPast: "bg-blue-100 text-blue-900",
+    dayFuture: "bg-zinc-50 border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-blue-600/30",
+    dayShadow: "shadow-blue-600/25",
+    dayFocusOutline: "focus-visible:outline-blue-600/40",
+  },
+  rose: {
+    dotBg: "bg-rose-500",
+    progressBg: "bg-rose-50",
+    progressText: "text-rose-600",
+    progressBarFrom: "from-rose-500",
+    progressBarTo: "to-pink-400",
+    progressTag: "bg-rose-50 text-rose-600",
+    dayToday: "bg-rose-600 text-white",
+    dayMarked: "bg-rose-300 text-zinc-900",
+    dayPast: "bg-rose-100 text-rose-900",
+    dayFuture: "bg-zinc-50 border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-rose-600/30",
+    dayShadow: "shadow-rose-600/25",
+    dayFocusOutline: "focus-visible:outline-rose-600/40",
+  },
+  amber: {
+    dotBg: "bg-amber-500",
+    progressBg: "bg-amber-50",
+    progressText: "text-amber-600",
+    progressBarFrom: "from-amber-500",
+    progressBarTo: "to-orange-400",
+    progressTag: "bg-amber-50 text-amber-600",
+    dayToday: "bg-amber-500 text-white",
+    dayMarked: "bg-amber-300 text-zinc-900",
+    dayPast: "bg-amber-100 text-amber-900",
+    dayFuture: "bg-zinc-50 border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-amber-500/30",
+    dayShadow: "shadow-amber-500/25",
+    dayFocusOutline: "focus-visible:outline-amber-600/40",
+  },
+  violet: {
+    dotBg: "bg-violet-500",
+    progressBg: "bg-violet-50",
+    progressText: "text-violet-600",
+    progressBarFrom: "from-violet-500",
+    progressBarTo: "to-purple-400",
+    progressTag: "bg-violet-50 text-violet-600",
+    dayToday: "bg-violet-600 text-white",
+    dayMarked: "bg-violet-300 text-zinc-900",
+    dayPast: "bg-violet-100 text-violet-900",
+    dayFuture: "bg-zinc-50 border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-violet-600/30",
+    dayShadow: "shadow-violet-600/25",
+    dayFocusOutline: "focus-visible:outline-violet-600/40",
+  },
+  cyan: {
+    dotBg: "bg-cyan-500",
+    progressBg: "bg-cyan-50",
+    progressText: "text-cyan-600",
+    progressBarFrom: "from-cyan-500",
+    progressBarTo: "to-sky-400",
+    progressTag: "bg-cyan-50 text-cyan-600",
+    dayToday: "bg-cyan-500 text-white",
+    dayMarked: "bg-cyan-300 text-zinc-900",
+    dayPast: "bg-cyan-100 text-cyan-900",
+    dayFuture: "bg-zinc-50 border border-zinc-200/60 text-zinc-900",
+    dayRing: "ring-cyan-500/30",
+    dayShadow: "shadow-cyan-500/25",
+    dayFocusOutline: "focus-visible:outline-cyan-600/40",
+  },
 };
 
 interface RangeSelectorProps {
@@ -25,14 +128,7 @@ interface RangeSelectorProps {
   onDuplicate: (rangeId: string) => void;
 }
 
-const colorMap: Record<string, string> = {
-  emerald: "bg-emerald-500",
-  blue: "bg-blue-500",
-  rose: "bg-rose-500",
-  amber: "bg-amber-500",
-  violet: "bg-violet-500",
-  cyan: "bg-cyan-500",
-};
+const fallbackTheme: ThemeColor = "emerald";
 
 function safeFormatISODate(iso: string | null | undefined) {
   if (!iso) return "—";
@@ -108,7 +204,7 @@ export function RangeSelector({
                   >
                     <div className="font-medium truncate flex items-center gap-2">
                       {range.color && (
-                        <span className={`w-2 h-2 rounded-full ${colorMap[range.color] || "bg-emerald-500"}`} />
+                        <span className={`w-2 h-2 rounded-full ${themeTokens[range.color]?.dotBg ?? themeTokens[fallbackTheme].dotBg}`} />
                       )}
                       {range.name}
                     </div>
