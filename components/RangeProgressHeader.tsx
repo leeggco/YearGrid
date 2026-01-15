@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { differenceInCalendarDays, format, isAfter, isBefore, startOfDay, parseISO } from "date-fns";
+import { differenceInCalendarDays, format, isAfter, isBefore, startOfDay, parseISO, endOfDay, differenceInSeconds } from "date-fns";
 import { motion } from "framer-motion";
 import { SavedRange } from "./RangeSelector";
 
@@ -22,46 +22,50 @@ const themeStyles: Record<string, { bg: string, text: string, bar: string[], tag
 export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
   const theme = themeStyles[range.color || 'emerald'] || themeStyles.emerald;
   const stats = useMemo(() => {
-    const start = startOfDay(parseISO(range.startISO));
-    const end = startOfDay(parseISO(range.endISO));
+    if (!range.startISO || !range.endISO) return null;
+
+    let start: Date, end: Date;
+    try {
+      start = startOfDay(parseISO(range.startISO));
+      end = startOfDay(parseISO(range.endISO));
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+    } catch {
+      return null;
+    }
+
     const today = startOfDay(now);
 
     const totalDays = differenceInCalendarDays(end, start) + 1;
     
     let daysPassed = 0;
     if (isAfter(today, start)) {
-      daysPassed = differenceInCalendarDays(today, start); // 不包含今天，或者视需求包含
-      // 如果包含今天作为"进行中"，通常已过是指完全过去的天数。
-      // 这里我们采用：如果今天是开始的第一天，passed=0。
-      // 如果今天是结束日，passed = total - 1。
-      // 但为了直观，通常包含今天在内的"已度过"可能更好理解，或者用"第N天"概念。
-      // 这里采用：已过 = 截止昨天的天数。
+      daysPassed = differenceInCalendarDays(today, start); 
     }
     
-    // 修正边界
     if (isBefore(today, start)) daysPassed = 0;
     if (isAfter(today, end)) daysPassed = totalDays;
 
-    // 当前第几天 (Current Day Index)
     let currentDayIndex = 0;
     if (!isBefore(today, start) && !isAfter(today, end)) {
-        currentDayIndex = differenceInCalendarDays(today, start) + 1;
+      currentDayIndex = differenceInCalendarDays(today, start) + 1;
     }
 
-    const daysRemaining = Math.max(0, differenceInCalendarDays(end, today));
+    const daysRemaining = totalDays - daysPassed;
 
-    // 进度条显示的百分比：包含今天的一半或者基于时间的流逝？
-    // 简单起见，基于 (today - start) / total。
-    // 如果还没开始，0。如果结束，100。
     let progressPercent = 0;
     if (isAfter(today, end)) {
         progressPercent = 100;
     } else if (isBefore(today, start)) {
         progressPercent = 0;
     } else {
-        const daysFromStart = differenceInCalendarDays(today, start); // 0-indexed
-        // 加上今天的时间流逝？这里只算天。
-        progressPercent = ((daysFromStart + 0.5) / totalDays) * 100;
+        const endAt = endOfDay(end);
+        const totalSeconds = differenceInSeconds(endAt, start);
+        const elapsedSeconds = differenceInSeconds(now, start);
+        if (totalSeconds <= 0) {
+            progressPercent = 100;
+        } else {
+            progressPercent = Math.min(100, Math.max(0, (elapsedSeconds / totalSeconds) * 100));
+        }
     }
 
     return {
@@ -71,9 +75,13 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
       progressPercent,
       isEnded: isAfter(today, end),
       isUpcoming: isBefore(today, start),
-      currentDayIndex
+      currentDayIndex,
+      formattedStart: format(start, "yyyy.MM.dd"),
+      formattedEnd: format(end, "yyyy.MM.dd")
     };
   }, [range, now]);
+
+  if (!stats) return null;
 
   return (
     <div className="mb-8 flex flex-col gap-6">
@@ -87,7 +95,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
             {!stats.isEnded && !stats.isUpcoming && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${theme.tag}`}>进行中</span>}
           </h2>
           <div className="text-sm text-zinc-500 mt-1 font-medium tabular-nums">
-            {format(parseISO(range.startISO), "yyyy.MM.dd")} - {format(parseISO(range.endISO), "yyyy.MM.dd")}
+            {stats.formattedStart} - {stats.formattedEnd}
             <span className="mx-2">·</span>
             共 {stats.totalDays} 天
           </div>
@@ -97,14 +105,14 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
         <div className="flex items-center gap-6">
             {!stats.isUpcoming && !stats.isEnded && (
                 <div className="text-right">
-                    <div className="text-sm text-zinc-500">剩余</div>
-                    <div className="text-2xl font-bold text-zinc-900 tabular-nums">{stats.daysRemaining}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
+                    <div className="text-sm text-zinc-500">已过</div>
+                    <div className="text-2xl font-bold text-emerald-600 tabular-nums">{stats.daysPassed}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
                 </div>
             )}
-             {!stats.isUpcoming && !stats.isEnded && (
+            {!stats.isUpcoming && !stats.isEnded && (
                 <div className="text-right">
-                    <div className="text-sm text-zinc-500">当前</div>
-                    <div className="text-2xl font-bold text-emerald-600 tabular-nums">Day {stats.currentDayIndex}</div>
+                    <div className="text-sm text-zinc-500">剩余</div>
+                    <div className="text-2xl font-bold text-zinc-900 tabular-nums">{stats.daysRemaining}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
                 </div>
             )}
             {stats.isUpcoming && (
@@ -130,7 +138,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
       {/* Percentage Label */}
       <div className="flex justify-between text-xs font-medium text-zinc-400 mt-[-16px]">
         <span>0%</span>
-        <span className="text-emerald-600">{stats.progressPercent.toFixed(1)}%</span>
+        <span className="text-emerald-600 tabular-nums">{stats.progressPercent.toFixed(3)}%</span>
         <span>100%</span>
       </div>
     </div>

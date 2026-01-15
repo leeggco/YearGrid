@@ -140,7 +140,7 @@ function DayCell({
     ) : null;
 
   const stateNode =
-    (variant === 'mini' ? entryState !== 0 || !!day.holiday : entryState !== 0) ? (
+    entryState !== 0 ? (
       <div className="pointer-events-none absolute right-1 top-1">
         <span
           className={`block rounded-full ${

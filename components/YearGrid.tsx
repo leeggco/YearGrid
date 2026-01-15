@@ -79,6 +79,17 @@ function isBodyState(value: unknown): value is BodyState {
   return value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5;
 }
 
+function isThemeColor(value: unknown): value is ThemeColor {
+  return (
+    value === 'emerald' ||
+    value === 'blue' ||
+    value === 'rose' ||
+    value === 'amber' ||
+    value === 'violet' ||
+    value === 'cyan'
+  );
+}
+
 function isISODateKey(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   try {
@@ -113,6 +124,8 @@ function normalizeRanges(value: unknown) {
     const name = (item as { name?: unknown }).name;
     const startISO = (item as { startISO?: unknown }).startISO;
     const endISO = (item as { endISO?: unknown }).endISO;
+    const color = (item as { color?: unknown }).color;
+    const entries = (item as { entries?: unknown }).entries;
     if (typeof id !== 'string' || typeof startISO !== 'string' || typeof endISO !== 'string') continue;
     const safeName = typeof name === 'string' ? name.trim() : '';
     try {
@@ -122,11 +135,15 @@ function normalizeRanges(value: unknown) {
     } catch {
       continue;
     }
+    const safeColor = isThemeColor(color) ? color : undefined;
+    const normalizedEntries = normalizeEntries(entries) ?? undefined;
     cleaned.push({
       id,
       name: safeName || '区间',
       startISO,
-      endISO
+      endISO,
+      ...(safeColor ? { color: safeColor } : {}),
+      ...(normalizedEntries ? { entries: normalizedEntries } : {})
     });
   }
   if (cleaned.length === 0) return [];
@@ -653,7 +670,7 @@ export default function YearGrid({
 
   const elapsedDays = useMemo(() => {
     const idx = days.findIndex((d) => d.state === 'today');
-    if (idx >= 0) return idx + 1;
+    if (idx >= 0) return idx;
     if (days.length === 0) return 0;
     const last = days[days.length - 1]?.date;
     if (!last) return 0;

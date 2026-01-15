@@ -34,6 +34,17 @@ const colorMap: Record<string, string> = {
   cyan: "bg-cyan-500",
 };
 
+function safeFormatISODate(iso: string | null | undefined) {
+  if (!iso) return "—";
+  try {
+    const date = parseISO(iso);
+    if (Number.isNaN(date.getTime())) return "—";
+    return format(date, "yyyy.MM.dd");
+  } catch {
+    return "—";
+  }
+}
+
 export function RangeSelector({
   ranges,
   activeRangeId,
@@ -102,7 +113,7 @@ export function RangeSelector({
                       {range.name}
                     </div>
                     <div className={`text-[10px] ${isActive ? "text-emerald-600/80" : "text-zinc-400"}`}>
-                      {format(parseISO(range.startISO), "yyyy.MM.dd")} - {format(parseISO(range.endISO), "yyyy.MM.dd")}
+                      {safeFormatISODate(range.startISO)} - {safeFormatISODate(range.endISO)}
                     </div>
                   </button>
 
