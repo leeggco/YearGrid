@@ -97,7 +97,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
             {!stats.isUpcoming && !stats.isEnded && (
                 <div className="text-right">
                     <div className="text-sm text-zinc-500">已过</div>
-                    <div className={`text-2xl font-bold tabular-nums ${theme.progressText}`}>{stats.daysPassed}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
+                    <div className={`text-2xl font-bold tabular-nums text-emerald-600`}>{stats.daysPassed}<span className="text-sm font-normal text-zinc-400 ml-1">天</span></div>
                 </div>
             )}
             {!stats.isUpcoming && !stats.isEnded && (

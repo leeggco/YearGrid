@@ -15,8 +15,6 @@ import {
 } from 'lucide-react';
 import { ViewMode } from '@/hooks/useYearProgress';
 import { ThemeColor, CustomRange, BodyState } from '@/lib/types';
-import { RangeSelector } from '@/components/RangeSelector';
-import { makeUniqueRangeName } from '@/lib/utils';
 import { BODY_STATE_META } from '@/lib/constants';
 
 interface ControlPanelProps {
@@ -42,7 +40,6 @@ interface ControlPanelProps {
   
   // Range related
   ranges: CustomRange[];
-  setRanges: React.Dispatch<React.SetStateAction<CustomRange[]>>;
   activeRangeId: string | null;
   setActiveRangeId: (id: string | null) => void;
   activeRange: CustomRange | null;
@@ -64,7 +61,6 @@ interface ControlPanelProps {
   // Handlers
   setTooltip: (v: null) => void;
   setSelectedISODate: (v: null) => void;
-  beginCreateRange: (opts: { setVisibleDefault: boolean }) => void;
   deleteActiveRange: () => void;
   applyRangeDraftToActive: () => void;
   cancelCreateRange: () => void;
@@ -83,6 +79,7 @@ interface ControlPanelProps {
   clearFilters: () => void;
   exportData: () => void;
   triggerImport: () => void;
+  openRangeNav?: () => void;
 }
 
 export function ControlPanel({
@@ -107,7 +104,6 @@ export function ControlPanel({
   setRecordFilter,
   
   ranges,
-  setRanges,
   activeRangeId,
   setActiveRangeId,
   activeRange,
@@ -128,7 +124,6 @@ export function ControlPanel({
   
   setTooltip,
   setSelectedISODate,
-  beginCreateRange,
   deleteActiveRange,
   applyRangeDraftToActive,
   cancelCreateRange,
@@ -145,6 +140,7 @@ export function ControlPanel({
   clearFilters,
   exportData,
   triggerImport,
+  openRangeNav,
 }: ControlPanelProps) {
   return (
     <div className="flex flex-col items-end gap-4">
@@ -247,27 +243,25 @@ export function ControlPanel({
         )}
 
         {viewMode === 'range' && (ranges.length > 0 || isEditingRange) && (
-          <div className="relative flex flex-col items-center gap-2">
+          <div className="relative flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
-              <RangeSelector
-                ranges={ranges}
-                activeRangeId={activeRangeId}
-                onSelect={(id) => {
-                  const r = ranges.find((item) => item.id === id);
-                  if (r) {
-                    setActiveRangeId(r.id);
-                    setCustomStartISO(r.startISO);
-                    setCustomEndISO(r.endISO);
-                    setRangeDraftStartISO(r.startISO);
-                    setRangeDraftEndISO(r.endISO);
-                    setRangeDraftName(r.name);
-                    setIsEditingRange(false);
-                  }
-                }}
-                onAdd={() => {
-                  beginCreateRange({ setVisibleDefault: true });
-                }}
-                onEdit={(r) => {
+              <button
+                type="button"
+                onClick={() => openRangeNav?.()}
+                className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-white pl-4 pr-3 py-2 text-sm font-medium text-zinc-900 shadow-sm transition-all hover:bg-zinc-50 active:scale-[0.98] lg:hidden"
+              >
+                <span className="truncate max-w-[120px]">我的篇章</span>
+                <ChevronRight className="h-4 w-4 text-zinc-400 rotate-90" />
+              </button>
+
+              <button
+                type="button"
+                disabled={!activeRangeId || isEditingRange}
+                className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition-all hover:bg-zinc-50 hover:text-zinc-900 disabled:bg-zinc-50 disabled:text-zinc-400"
+                onClick={() => {
+                  if (!activeRangeId) return;
+                  const r = ranges.find((item) => item.id === activeRangeId);
+                  if (!r) return;
                   setActiveRangeId(r.id);
                   setRangeDraftName(r.name);
                   setRangeDraftStartISO(r.startISO);
@@ -276,48 +270,10 @@ export function ControlPanel({
                   setIsEditingRange(true);
                   setRangeDraftSaving(false);
                 }}
-                onDelete={(id) => {
-                  const index = ranges.findIndex(r => r.id === id);
-                  if (index >= 0) {
-                    const nextRanges = ranges.filter(r => r.id !== id);
-                    setRanges(nextRanges);
-                    if (activeRangeId === id) {
-                      const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
-                      setActiveRangeId(nextActive?.id ?? null);
-                      if (nextActive) {
-                        setCustomStartISO(nextActive.startISO);
-                        setCustomEndISO(nextActive.endISO);
-                      }
-                    }
-                  }
-                }}
-                onDuplicate={(id) => {
-                  const r = ranges.find(item => item.id === id);
-                  if (!r) return;
-                  const newId = `range_${Date.now()}`;
-                  const desired = `${r.name} 副本`;
-                  const name = makeUniqueRangeName(desired, ranges);
-                  const next = { ...r, id: newId, name };
-                  setRanges((prev: CustomRange[]) => [...prev, next]);
-                  setActiveRangeId(newId);
-                  setCustomStartISO(next.startISO);
-                  setCustomEndISO(next.endISO);
-                }}
-              />
-
-              <div className="h-4 w-px bg-zinc-200" />
-
-              <button
-                type="button"
-                onClick={() => setIsEditingRange(!isEditingRange)}
-                className={`rounded-lg border p-2.5 transition-all ${
-                  isEditingRange
-                    ? 'border-emerald-600 bg-emerald-600 text-white shadow-md'
-                    : 'border-zinc-200/60 bg-white text-zinc-500 shadow-sm hover:border-emerald-600/50 hover:text-zinc-900'
-                }`}
-                title="区间设置"
+                title="编辑"
               >
                 <Settings2 className="h-4 w-4" />
+                编辑
               </button>
             </div>
 

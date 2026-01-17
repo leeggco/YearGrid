@@ -32,7 +32,7 @@ function TopNavBar({ onLogin, onRegister }: { onLogin: () => void; onRegister: (
           >
             YG
           </span>
-          <span className="text-base font-semibold text-zinc-900">YearGrid</span>
+          <span className="text-base font-semibold text-zinc-900">此间</span>
         </Link>
 
         <div className="flex items-center gap-3">

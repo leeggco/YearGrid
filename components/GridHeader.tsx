@@ -12,6 +12,7 @@ interface GridHeaderProps {
   rangeStart: Date;
   now: Date;
   isEditingRange: boolean;
+  rangeDraftName?: string;
   highlightWeekends: boolean;
   setHighlightWeekends: (v: boolean) => void;
   highlightHolidays: boolean;
@@ -24,12 +25,13 @@ export function GridHeader({
   rangeStart,
   now,
   isEditingRange,
+  rangeDraftName,
   highlightWeekends,
   setHighlightWeekends,
   highlightHolidays,
   setHighlightHolidays
 }: GridHeaderProps) {
-  if (viewMode === 'range' && activeRange) {
+  if (viewMode === 'range' && activeRange && !isEditingRange) {
     return (
       <div className="mb-6 space-y-4">
         <div className="flex justify-end">
@@ -41,7 +43,7 @@ export function GridHeader({
           />
         </div>
 
-        {!isEditingRange && <RangeProgressHeader range={activeRange} now={now} />}
+        <RangeProgressHeader range={activeRange} now={now} />
       </div>
     );
   }
@@ -55,7 +57,7 @@ export function GridHeader({
             ? format(rangeStart, 'M月')
             : viewMode === 'week'
               ? '本周'
-              : activeRange?.name?.trim() || '区间'}
+              : (isEditingRange ? rangeDraftName : activeRange?.name)?.trim() || '区间'}
       </div>
       <Legend
         showWeekends={highlightWeekends}

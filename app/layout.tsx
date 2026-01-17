@@ -7,7 +7,7 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
 
 export const metadata: Metadata = {
-  title: 'YearGrid 年度进度',
+  title: '此间',
   description: '用极简网格可视化一年流逝的进度。'
 };
 

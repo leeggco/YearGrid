@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Plus, Check, Trash2, Copy, Settings2 } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { ChevronDown, Plus, Check, Trash2, Copy, Settings2, X } from "lucide-react";
+import { format, parseISO, startOfDay, isBefore, isAfter, differenceInCalendarDays } from "date-fns";
 
 import { ThemeColor, SavedRange } from '@/lib/types';
 
@@ -264,6 +264,234 @@ export function RangeSelector({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+type RangeStatus = 'active' | 'upcoming' | 'ended';
+
+function getRangeStatus(range: SavedRange, now: Date): RangeStatus {
+  const start = startOfDay(parseISO(range.startISO));
+  const end = startOfDay(parseISO(range.endISO));
+  const today = startOfDay(now);
+  if (isBefore(today, start)) return 'upcoming';
+  if (isAfter(today, end)) return 'ended';
+  return 'active';
+}
+
+function getRangeSummary(range: SavedRange, now: Date) {
+  const start = startOfDay(parseISO(range.startISO));
+  const end = startOfDay(parseISO(range.endISO));
+  const today = startOfDay(now);
+  const totalDays = differenceInCalendarDays(end, start) + 1;
+  const status = getRangeStatus(range, now);
+
+  if (status === 'upcoming') {
+    return {
+      status,
+      totalDays,
+      label: '未开始',
+      detail: `还有 ${Math.max(0, differenceInCalendarDays(start, today))} 天`
+    };
+  }
+
+  if (status === 'ended') {
+    return {
+      status,
+      totalDays,
+      label: '已结束',
+      detail: '已完成'
+    };
+  }
+
+  const daysPassed = Math.max(0, Math.min(totalDays, differenceInCalendarDays(today, start)));
+  const daysRemaining = Math.max(0, totalDays - daysPassed);
+  return {
+    status,
+    totalDays,
+    label: '进行中',
+    detail: `剩余 ${daysRemaining} 天`
+  };
+}
+
+function sortRangesByCreatedDesc(ranges: SavedRange[]) {
+  return [...ranges].reverse();
+}
+
+interface RangeNavProps extends RangeSelectorProps {
+  now: Date;
+  variant: 'sidebar' | 'drawer';
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export function RangeNav({
+  ranges,
+  activeRangeId,
+  onSelect,
+  onAdd,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  now,
+  variant,
+  open,
+  onOpenChange
+}: RangeNavProps) {
+  const sortedRanges = useMemo(() => sortRangesByCreatedDesc(ranges), [ranges]);
+
+  useEffect(() => {
+    if (variant !== 'drawer' || !open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onOpenChange?.(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onOpenChange, variant]);
+
+  const content = (
+    <div className="flex h-full flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-zinc-900">
+          我的篇章
+          <span className="ml-2 text-xs font-medium text-zinc-400">({ranges.length})</span>
+        </div>
+        {variant === 'drawer' && (
+          <button
+            type="button"
+            className="rounded-md p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+            onClick={() => onOpenChange?.(false)}
+            aria-label="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl border border-zinc-200/60 bg-white p-2 custom-scrollbar">
+        {sortedRanges.map((range) => {
+          const isActive = range.id === activeRangeId;
+          const theme = themeTokens[range.color || fallbackTheme] ?? themeTokens[fallbackTheme];
+          const summary = getRangeSummary(range, now);
+
+          const statusPill =
+            summary.status === 'active' ? (
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${theme.progressTag}`}>{summary.label}</span>
+            ) : summary.status === 'upcoming' ? (
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">{summary.label}</span>
+            ) : (
+              <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500">{summary.label}</span>
+            );
+
+          return (
+            <div
+              key={range.id}
+              className={`group relative flex items-start justify-between rounded-lg px-2 py-2 text-sm transition-colors ${
+                isActive ? "bg-emerald-50 text-emerald-900" : "hover:bg-zinc-50 text-zinc-700"
+              }`}
+            >
+              <button
+                className="flex-1 text-left pr-8"
+                onClick={() => {
+                  onSelect(range.id);
+                  if (variant === 'drawer') onOpenChange?.(false);
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${theme.dotBg}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="truncate font-medium">{range.name}</div>
+                      {statusPill}
+                    </div>
+                    <div className={`mt-0.5 flex items-center justify-between text-[10px] ${
+                      isActive ? "text-emerald-600/80" : "text-zinc-400"
+                    }`}>
+                      <span className="truncate">
+                        {safeFormatISODate(range.startISO)} - {safeFormatISODate(range.endISO)}
+                      </span>
+                      <span className="ml-2 shrink-0 tabular-nums">{summary.detail}</span>
+                    </div>
+                  </div>
+                </div>
+              </button>
+
+              {isActive && <Check className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600" />}
+
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white/80 backdrop-blur-sm rounded-md pl-1 shadow-sm border border-zinc-100">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(range);
+                    if (variant === 'drawer') onOpenChange?.(false);
+                  }}
+                  className="p-1 hover:bg-zinc-100 rounded text-zinc-500 hover:text-zinc-900"
+                  title="编辑"
+                >
+                  <Settings2 className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDuplicate(range.id);
+                  }}
+                  className="p-1 hover:bg-zinc-100 rounded text-zinc-500 hover:text-zinc-900"
+                  title="复制"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(range.id);
+                  }}
+                  className="p-1 hover:bg-rose-50 rounded text-zinc-400 hover:text-rose-600"
+                  title="删除"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {sortedRanges.length === 0 && (
+          <div className="px-2 py-4 text-center text-xs text-zinc-400">
+            暂无区间，开始创建吧
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={() => {
+          onAdd();
+          if (variant === 'drawer') onOpenChange?.(false);
+        }}
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-900 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800"
+        type="button"
+      >
+        <Plus className="h-4 w-4" />
+        新建篇章
+      </button>
+    </div>
+  );
+
+  if (variant === 'sidebar') {
+    return <div className="h-full">{content}</div>;
+  }
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/40"
+        onClick={() => onOpenChange?.(false)}
+        aria-label="关闭"
+      />
+      <div className="absolute inset-y-0 right-0 w-[320px] max-w-[90vw] bg-white shadow-2xl p-4">
+        {content}
+      </div>
     </div>
   );
 }

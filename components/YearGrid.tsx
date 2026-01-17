@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   format,
   isAfter,
@@ -23,6 +23,8 @@ import { Guide } from '@/components/Guide';
 import { RangeEmptyState } from '@/components/RangeEmptyState';
 import { GridHeader } from '@/components/GridHeader';
 import { computeRangePreview } from '@/lib/normalization';
+import { RangeNav, type SavedRange } from '@/components/RangeSelector';
+import { makeUniqueRangeName } from '@/lib/utils';
 
 export default function YearGrid({
   holidays,
@@ -31,6 +33,7 @@ export default function YearGrid({
   holidays?: Record<string, string>;
   initialNowISO?: string;
 }) {
+  const [isRangeNavOpen, setIsRangeNavOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -266,6 +269,97 @@ export default function YearGrid({
 
   const gridGap = viewMode === 'month' || viewMode === 'week' || viewMode === 'range' ? 8 : 6;
 
+  useEffect(() => {
+    if (viewMode !== 'range') setIsRangeNavOpen(false);
+  }, [viewMode]);
+
+  const handleSelectRange = useCallback((id: string) => {
+    const r = ranges.find((item) => item.id === id);
+    if (!r) return;
+    setActiveRangeId(r.id);
+    setCustomStartISO(r.startISO);
+    setCustomEndISO(r.endISO);
+    setRangeDraftStartISO(r.startISO);
+    setRangeDraftEndISO(r.endISO);
+    setRangeDraftName(r.name);
+    setIsEditingRange(false);
+    setIsRangeNavOpen(false);
+  }, [
+    ranges,
+    setActiveRangeId,
+    setCustomEndISO,
+    setCustomStartISO,
+    setIsEditingRange,
+    setRangeDraftEndISO,
+    setRangeDraftName,
+    setRangeDraftStartISO
+  ]);
+
+  const handleAddRange = useCallback(() => {
+    beginCreateRange({ setVisibleDefault: true });
+    setIsRangeNavOpen(false);
+  }, [beginCreateRange]);
+
+  const handleEditRange = useCallback((r: SavedRange) => {
+    setActiveRangeId(r.id);
+    setRangeDraftName(r.name);
+    setRangeDraftStartISO(r.startISO);
+    setRangeDraftEndISO(r.endISO);
+    setRangeDraftColor(r.color || 'emerald');
+    setIsEditingRange(true);
+    setRangeDraftSaving(false);
+    setIsRangeNavOpen(false);
+  }, [
+    setActiveRangeId,
+    setIsEditingRange,
+    setRangeDraftColor,
+    setRangeDraftEndISO,
+    setRangeDraftName,
+    setRangeDraftSaving,
+    setRangeDraftStartISO
+  ]);
+
+  const handleDeleteRange = useCallback((id: string) => {
+    const index = ranges.findIndex(r => r.id === id);
+    if (index < 0) return;
+    const nextRanges = ranges.filter(r => r.id !== id);
+    setRanges(nextRanges);
+    if (activeRangeId === id) {
+      const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
+      setActiveRangeId(nextActive?.id ?? null);
+      if (nextActive) {
+        setCustomStartISO(nextActive.startISO);
+        setCustomEndISO(nextActive.endISO);
+      }
+    }
+  }, [
+    activeRangeId,
+    ranges,
+    setActiveRangeId,
+    setCustomEndISO,
+    setCustomStartISO,
+    setRanges
+  ]);
+
+  const handleDuplicateRange = useCallback((id: string) => {
+    const r = ranges.find(item => item.id === id);
+    if (!r) return;
+    const newId = `range_${Date.now()}`;
+    const desired = `${r.name} 副本`;
+    const name = makeUniqueRangeName(desired, ranges);
+    const next = { ...r, id: newId, name };
+    setRanges((prev) => [...prev, next]);
+    setActiveRangeId(newId);
+    setCustomStartISO(next.startISO);
+    setCustomEndISO(next.endISO);
+  }, [
+    ranges,
+    setActiveRangeId,
+    setCustomEndISO,
+    setCustomStartISO,
+    setRanges
+  ]);
+
   const activeStateButtonClass = (state: BodyState) => {
     switch (state) {
       case 1: return 'border-emerald-200 bg-emerald-50 text-emerald-700';
@@ -314,7 +408,6 @@ export default function YearGrid({
             recordFilter={recordFilter}
             setRecordFilter={setRecordFilter}
             ranges={ranges}
-            setRanges={setRanges}
             activeRangeId={activeRangeId}
             setActiveRangeId={setActiveRangeId}
             activeRange={activeRange}
@@ -334,7 +427,6 @@ export default function YearGrid({
             setRangeDraftSaving={setRangeDraftSaving}
             setTooltip={setTooltip}
             setSelectedISODate={setSelectedISODate}
-            beginCreateRange={beginCreateRange}
             deleteActiveRange={deleteActiveRange}
             applyRangeDraftToActive={applyRangeDraftToActive}
             cancelCreateRange={cancelCreateRange}
@@ -349,6 +441,7 @@ export default function YearGrid({
             clearFilters={clearFilters}
             exportData={exportData}
             triggerImport={triggerImport}
+            openRangeNav={() => setIsRangeNavOpen(true)}
           />
         </div>
 
@@ -365,51 +458,135 @@ export default function YearGrid({
         ) : (
           /* 重点卡片：标题 + 网格（年视图为 12 个月块；其他视图为连续日网格） */
           <div className="w-full rounded-2xl border border-zinc-200/60 bg-white p-6 shadow-sm">
-            <GridHeader
-              viewMode={viewMode}
-              activeRange={activeRange}
-              rangeStart={rangeStart}
-              now={now}
-              isEditingRange={isEditingRange}
-              highlightWeekends={highlightWeekends}
-              setHighlightWeekends={setHighlightWeekends}
-              highlightHolidays={highlightHolidays}
-              setHighlightHolidays={setHighlightHolidays}
-            />
+            {viewMode === 'range' ? (
+              <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+                <div className="hidden lg:block">
+                  <RangeNav
+                    variant="sidebar"
+                    now={now}
+                    ranges={ranges}
+                    activeRangeId={activeRangeId}
+                    onSelect={handleSelectRange}
+                    onAdd={handleAddRange}
+                    onEdit={handleEditRange}
+                    onDelete={handleDeleteRange}
+                    onDuplicate={handleDuplicateRange}
+                  />
+                </div>
 
-            <YearGridBody
-              viewMode={viewMode}
-              days={days}
-              columns={columns}
-              gridGap={gridGap}
-              entries={entries}
-              selectedISODate={selectedISODate}
-              focusedISODate={focusedISODate}
-              highlightWeekends={highlightWeekends}
-              highlightHolidays={highlightHolidays}
-              effectiveHighlightThisMonth={effectiveHighlightThisMonth}
-              currentMonth={currentMonth}
-              recordFilter={recordFilter}
-              noteOnly={noteOnly}
-              stateFilters={stateFilters}
-              noteQuery={noteQuery}
-              isDragging={isDragging}
-              dragStartISO={dragStartISO}
-              dragCurrentISO={dragCurrentISO}
-              isRangeEditing={isRangeEditing}
-              rangeDraftColor={rangeDraftColor}
-              rangeDraftStartISO={rangeDraftStartISO}
-              rangeDraftEndISO={rangeDraftEndISO}
-              onCellHover={handleCellHover}
-              onCellMove={handleCellMove}
-              onCellLeave={handleCellLeave}
-              onCellFocus={handleCellFocus}
-              onCellBlur={handleCellBlur}
-              onCellKeyDown={handleCellKeyDown}
-              onCellClick={handleCellClick}
-              onCellMouseDown={handleCellMouseDown}
-              onCellMouseUp={handleCellMouseUp}
-            />
+                <div className="min-w-0">
+                  <GridHeader
+                    viewMode={viewMode}
+                    activeRange={activeRange}
+                    rangeStart={rangeStart}
+                    now={now}
+                    isEditingRange={isEditingRange}
+                    rangeDraftName={rangeDraftName}
+                    highlightWeekends={highlightWeekends}
+                    setHighlightWeekends={setHighlightWeekends}
+                    highlightHolidays={highlightHolidays}
+                    setHighlightHolidays={setHighlightHolidays}
+                  />
+
+                  <YearGridBody
+                    viewMode={viewMode}
+                    days={days}
+                    columns={columns}
+                    gridGap={gridGap}
+                    entries={entries}
+                    selectedISODate={selectedISODate}
+                    focusedISODate={focusedISODate}
+                    highlightWeekends={highlightWeekends}
+                    highlightHolidays={highlightHolidays}
+                    effectiveHighlightThisMonth={effectiveHighlightThisMonth}
+                    currentMonth={currentMonth}
+                    recordFilter={recordFilter}
+                    noteOnly={noteOnly}
+                    stateFilters={stateFilters}
+                    noteQuery={noteQuery}
+                    isDragging={isDragging}
+                    dragStartISO={dragStartISO}
+                    dragCurrentISO={dragCurrentISO}
+                    isRangeEditing={isRangeEditing}
+                    rangeDraftColor={rangeDraftColor}
+                    rangeDraftStartISO={rangeDraftStartISO}
+                    rangeDraftEndISO={rangeDraftEndISO}
+                    onCellHover={handleCellHover}
+                    onCellMove={handleCellMove}
+                    onCellLeave={handleCellLeave}
+                    onCellFocus={handleCellFocus}
+                    onCellBlur={handleCellBlur}
+                    onCellKeyDown={handleCellKeyDown}
+                    onCellClick={handleCellClick}
+                    onCellMouseDown={handleCellMouseDown}
+                    onCellMouseUp={handleCellMouseUp}
+                  />
+                </div>
+
+                <RangeNav
+                  variant="drawer"
+                  now={now}
+                  open={isRangeNavOpen}
+                  onOpenChange={setIsRangeNavOpen}
+                  ranges={ranges}
+                  activeRangeId={activeRangeId}
+                  onSelect={handleSelectRange}
+                  onAdd={handleAddRange}
+                  onEdit={handleEditRange}
+                  onDelete={handleDeleteRange}
+                  onDuplicate={handleDuplicateRange}
+                />
+              </div>
+            ) : (
+              <>
+                <GridHeader
+                  viewMode={viewMode}
+                  activeRange={activeRange}
+                  rangeStart={rangeStart}
+                  now={now}
+                  isEditingRange={isEditingRange}
+                  rangeDraftName={rangeDraftName}
+                  highlightWeekends={highlightWeekends}
+                  setHighlightWeekends={setHighlightWeekends}
+                  highlightHolidays={highlightHolidays}
+                  setHighlightHolidays={setHighlightHolidays}
+                />
+
+                <YearGridBody
+                  viewMode={viewMode}
+                  days={days}
+                  columns={columns}
+                  gridGap={gridGap}
+                  entries={entries}
+                  selectedISODate={selectedISODate}
+                  focusedISODate={focusedISODate}
+                  highlightWeekends={highlightWeekends}
+                  highlightHolidays={highlightHolidays}
+                  effectiveHighlightThisMonth={effectiveHighlightThisMonth}
+                  currentMonth={currentMonth}
+                  recordFilter={recordFilter}
+                  noteOnly={noteOnly}
+                  stateFilters={stateFilters}
+                  noteQuery={noteQuery}
+                  isDragging={isDragging}
+                  dragStartISO={dragStartISO}
+                  dragCurrentISO={dragCurrentISO}
+                  isRangeEditing={isRangeEditing}
+                  rangeDraftColor={rangeDraftColor}
+                  rangeDraftStartISO={rangeDraftStartISO}
+                  rangeDraftEndISO={rangeDraftEndISO}
+                  onCellHover={handleCellHover}
+                  onCellMove={handleCellMove}
+                  onCellLeave={handleCellLeave}
+                  onCellFocus={handleCellFocus}
+                  onCellBlur={handleCellBlur}
+                  onCellKeyDown={handleCellKeyDown}
+                  onCellClick={handleCellClick}
+                  onCellMouseDown={handleCellMouseDown}
+                  onCellMouseUp={handleCellMouseUp}
+                />
+              </>
+            )}
           </div>
         )}
       </div>
