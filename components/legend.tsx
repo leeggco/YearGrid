@@ -33,11 +33,13 @@ export function Legend({
               key={item.label}
               type="button"
               onClick={onClick}
+              disabled={!onClick}
+              aria-pressed={isActive}
               className={`flex items-center gap-2 rounded-md px-2 py-1 transition-all ${
                 isActive 
                   ? 'bg-zinc-100 ring-1 ring-zinc-200 shadow-sm' 
                   : 'hover:bg-zinc-50 opacity-60 grayscale'
-              }`}
+              } ${!onClick ? 'cursor-not-allowed opacity-40 grayscale-0' : ''}`}
             >
               <div
                 className={`h-3.5 w-3.5 rounded ${item.border ? 'border border-zinc-200' : ''}`}

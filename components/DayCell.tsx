@@ -31,6 +31,8 @@ type Props = {
   dataIso?: string;
   showWeekend?: boolean;
   showHoliday?: boolean;
+  showDateNumber?: boolean;
+  dimDateNumber?: boolean;
 };
 
 function entryDotClass(state: BodyState) {
@@ -58,7 +60,9 @@ function DayCell({
   tabIndex,
   dataIso,
   showWeekend = false,
-  showHoliday = false
+  showHoliday = false,
+  showDateNumber = false,
+  dimDateNumber = false
 }: Props) {
   const theme = themeTokens[themeColor] || themeTokens.emerald;
   const baseClasses =
@@ -70,6 +74,8 @@ function DayCell({
 
   const dateNumber = day.date.getDate();
   const isToday = day.state === 'today';
+  const showHolidayLabel = !!day.holiday && showHoliday;
+  const showMiniDate = showDateNumber && (variant === 'mini' || variant === 'compact');
 
   const entryState = entry?.state ?? 0;
   const entryDot = entryDotClass(entryState);
@@ -79,43 +85,67 @@ function DayCell({
     ? `ring-2 ${theme.dayRing} ring-offset-2 ring-offset-white ${theme.dayShadow} shadow-lg`
     : '';
 
-  const backgroundClass = isDragSelected
-    ? theme.dayMarked
-    : isToday
-      ? theme.dayToday
-      : forceGray
-        ? 'bg-zinc-200/70 text-zinc-700'
-        : isMarked
-          ? theme.dayMarked
-          : (day.holiday && showHoliday)
-            ? 'bg-[#FFB4AD] text-zinc-900'
-            : (day.isWeekend && showWeekend)
-              ? 'bg-[#D2D5F2] text-zinc-900'
-              : day.state === 'past'
-                ? theme.dayPast
+  const backgroundClass = day.state === 'past'
+    ? 'bg-[#888888] text-white'
+    : isDragSelected
+      ? theme.dayMarked
+      : isToday
+        ? theme.dayToday
+        : forceGray
+          ? 'bg-zinc-200/70 text-zinc-700'
+          : isMarked
+            ? theme.dayMarked
+            : (day.holiday && showHoliday)
+              ? 'bg-[#FFB4AD] text-zinc-900'
+              : (day.isWeekend && showWeekend)
+                ? 'bg-[#D2D5F2] text-zinc-900'
                 : theme.dayFuture;
 
   const primaryLargeTextClass = isToday ? 'text-white' : 'text-zinc-900';
   const secondaryLargeTextClass = isToday ? 'text-white/90' : 'text-zinc-600';
 
-  const contentNode = variant === 'large' ? (
+  const contentNode =
+    variant === 'large' ? (
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-0.5 px-1">
         <div
-          className={`select-none text-base font-semibold leading-none tabular-nums ${
+          className={`select-none text-lg font-semibold leading-none tabular-nums ${
             primaryLargeTextClass
-          }`}
+          } ${dimDateNumber ? 'opacity-30' : ''}`}
         >
           {dateNumber}
         </div>
-        {day.holiday ? (
+        {showHolidayLabel ? (
           <div
-            className={`select-none text-[10px] font-semibold leading-none tracking-tight ${
+            className={`select-none text-[12px] font-semibold leading-none tracking-tight ${
               secondaryLargeTextClass
             }`}
           >
             {day.holiday}
           </div>
         ) : null}
+      </div>
+    ) : showMiniDate || showHolidayLabel ? (
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-0.5">
+        <div className="flex max-w-full flex-col items-center justify-center gap-0.5">
+          {showMiniDate ? (
+            <div
+              className={`select-none font-semibold leading-none tabular-nums ${
+                variant === 'mini' ? 'text-[10px]' : 'text-[13px]'
+              } ${dimDateNumber ? 'opacity-30' : ''}`}
+            >
+              {dateNumber}
+            </div>
+          ) : null}
+          {showHolidayLabel ? (
+            <div
+              className={`select-none font-semibold leading-none tracking-tight ${
+                variant === 'mini' ? 'text-[8px]' : 'text-[10px]'
+              } truncate`}
+            >
+              {day.holiday}
+            </div>
+          ) : null}
+        </div>
       </div>
     ) : null;
 

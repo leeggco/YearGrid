@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { YearDay, ViewMode } from '@/hooks/useYearProgress';
 import DayCell from '@/components/DayCell';
-import { BodyState, Entry } from '@/lib/types';
+import { Entry } from '@/lib/types';
 import { ThemeColor } from '@/components/RangeSelector';
 
 interface YearGridBodyProps {
@@ -14,12 +14,7 @@ interface YearGridBodyProps {
   focusedISODate: string | null;
   highlightWeekends: boolean;
   highlightHolidays: boolean;
-  effectiveHighlightThisMonth: boolean;
   currentMonth: number;
-  recordFilter: 'all' | 'recorded' | 'unrecorded';
-  noteOnly: boolean;
-  stateFilters: BodyState[];
-  noteQuery: string;
   isDragging: boolean;
   dragStartISO: string | null;
   dragCurrentISO: string | null;
@@ -33,7 +28,7 @@ interface YearGridBodyProps {
   onCellFocus: (day: YearDay, e: React.FocusEvent<HTMLDivElement>) => void;
   onCellBlur: (day: YearDay) => void;
   onCellKeyDown: (day: YearDay, e: React.KeyboardEvent<HTMLDivElement>) => void;
-  onCellClick: (day: YearDay) => void;
+  onCellClick: (day: YearDay, e: React.MouseEvent<HTMLDivElement>) => void;
   onCellMouseDown: (day: YearDay) => void;
   onCellMouseUp: (day: YearDay) => void;
 }
@@ -48,12 +43,7 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
   focusedISODate,
   highlightWeekends,
   highlightHolidays,
-  effectiveHighlightThisMonth,
   currentMonth,
-  recordFilter,
-  noteOnly,
-  stateFilters,
-  noteQuery,
   isDragging,
   dragStartISO,
   dragCurrentISO,
@@ -71,6 +61,7 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
   onCellMouseDown,
   onCellMouseUp,
 }) => {
+  const [hoveredMonth, setHoveredMonth] = useState<number | null>(null);
   const yearMonthBlocks = useMemo(() => {
     if (viewMode !== 'year') return [];
     const byMonth = new Map<number, YearDay[]>();
@@ -90,37 +81,14 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
     return blocks;
   }, [days, viewMode]);
 
-  const renderDayCell = (day: YearDay, variant: 'compact' | 'mini' | 'large') => {
+  const renderDayCell = (
+    day: YearDay,
+    variant: 'compact' | 'mini' | 'large' = 'compact',
+    isActiveMonth: boolean = false
+  ) => {
     const entry = entries[day.isoDate] ?? null;
     const selected = selectedISODate === day.isoDate;
-
-    const propertyHighlightActive = effectiveHighlightThisMonth;
-    const propertyMatch =
-      !propertyHighlightActive ||
-      (effectiveHighlightThisMonth && day.month === currentMonth);
-
-    const recorded = !!entry;
-    const hasNote = !!entry?.note.trim();
-    const recordMatch =
-      recordFilter === 'all'
-        ? true
-        : recordFilter === 'recorded'
-          ? recorded
-          : !recorded;
-    const noteMatch = !noteOnly || hasNote;
-    const stateMatch =
-      stateFilters.length === 0 ? true : entry ? stateFilters.includes(entry.state) : false;
-    const q = noteQuery.trim().toLowerCase();
-    const queryMatch = !q || (hasNote && entry!.note.toLowerCase().includes(q));
-
-    const anyFilter =
-      propertyHighlightActive ||
-      recordFilter !== 'all' ||
-      noteOnly ||
-      stateFilters.length > 0 ||
-      q !== '';
-    const matches = propertyMatch && recordMatch && noteMatch && stateMatch && queryMatch;
-    const dimmed = viewMode !== 'range' && anyFilter && !matches;
+    const dimmed = false;
 
     let isDragSelected = false;
     if (isDragging && dragStartISO && dragCurrentISO) {
@@ -148,6 +116,8 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
         entry={isRangeEditing ? null : entry}
         showWeekend={highlightWeekends}
         showHoliday={highlightHolidays}
+        showDateNumber={variant === 'mini' || viewMode === 'month' ? true : isActiveMonth}
+        dimDateNumber={(variant === 'mini' || viewMode === 'month') && !isActiveMonth}
         onHover={onCellHover}
         onMove={onCellMove}
         onLeave={onCellLeave}
@@ -161,25 +131,75 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
     );
   };
 
+  if (viewMode === 'month') {
+    if (days.length === 0) return null;
+    const offset = (days[0].date.getDay() + 6) % 7;
+    const totalCells = offset + days.length;
+    const trailing = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+
+    return (
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: 'repeat(7, 1fr)' }}
+      >
+        {['一', '二', '三', '四', '五', '六', '日'].map((wd) => (
+          <div
+            key={wd}
+            className="mb-1 text-center text-xs font-medium text-zinc-400"
+          >
+            {wd}
+          </div>
+        ))}
+        {Array.from({ length: offset }).map((_, i) => (
+          <div key={`offset-${i}`} />
+        ))}
+        {days.map((day) => renderDayCell(day, 'compact', true))}
+        {Array.from({ length: trailing }).map((_, i) => (
+          <div key={`trailing-${i}`} />
+        ))}
+      </div>
+    );
+  }
+
   if (viewMode === 'year') {
     return (
       <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {yearMonthBlocks.map((block) => (
-          <div key={block.month} className="flex flex-col">
+        {yearMonthBlocks.map((block) => {
+          const isCurrentMonth = block.month === currentMonth;
+          const isHovered = hoveredMonth === block.month;
+          const isActive = isCurrentMonth || isHovered;
+          
+          return (
+          <div
+            key={block.month}
+            className={`flex flex-col rounded-2xl transition-all duration-300 ease-out ${
+              isActive ? 'bg-zinc-50' : ''
+            } ${
+              isCurrentMonth 
+                ? 'sm:col-span-2 sm:row-span-2 p-6 shadow-sm ring-1 ring-zinc-200/50' 
+                : 'p-3'
+            }`}
+            onMouseEnter={() => setHoveredMonth(block.month)}
+            onMouseLeave={() => setHoveredMonth(null)}
+          >
             <div className="mb-3 flex items-baseline justify-between">
-              <span className="text-sm font-semibold text-zinc-900">{block.month}月</span>
-              <span className="text-[10px] text-zinc-400">
+              <span className={`${isCurrentMonth ? 'text-xl' : 'text-sm'} font-semibold text-zinc-900`}>
+                {block.month}月
+              </span>
+              <span className={`${isCurrentMonth ? 'text-xs' : 'text-[10px]'} text-zinc-400`}>
                 {block.days.length}天
               </span>
             </div>
             <div
-              className="grid gap-1.5"
+              className={`grid ${isCurrentMonth ? 'gap-2' : 'gap-1.5'}`}
               style={{ gridTemplateColumns: 'repeat(7, 1fr)' }}
             >
               {['一', '二', '三', '四', '五', '六', '日'].map((wd) => (
                 <div
                   key={wd}
-                  className="mb-1 text-center text-[10px] font-medium text-zinc-400"
+                  className={`mb-1 text-center font-medium text-zinc-400 ${
+                    isCurrentMonth ? 'text-xs' : 'text-[10px]'
+                  }`}
                 >
                   {wd}
                 </div>
@@ -187,10 +207,10 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
               {Array.from({ length: block.offset }).map((_, i) => (
                 <div key={`offset-${i}`} />
               ))}
-              {block.days.map((day) => renderDayCell(day, 'mini'))}
+              {block.days.map((day) => renderDayCell(day, isCurrentMonth ? 'compact' : 'mini', isActive))}
             </div>
           </div>
-        ))}
+        )})}
       </div>
     );
   }
@@ -203,14 +223,7 @@ export const YearGridBody: React.FC<YearGridBodyProps> = ({
         gap: `${gridGap}px`,
       }}
     >
-      {days.map((day) =>
-        renderDayCell(
-          day,
-          viewMode === 'month' || viewMode === 'week' || viewMode === 'range'
-            ? 'compact'
-            : 'large'
-        )
-      )}
+      {days.map((day) => renderDayCell(day, 'compact', true))}
     </div>
   );
 };

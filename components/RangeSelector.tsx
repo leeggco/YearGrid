@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronDown, Plus, Check, Trash2, Copy, Settings2, X } from "lucide-react";
-import { format, parseISO, startOfDay, isBefore, isAfter, differenceInCalendarDays } from "date-fns";
+import { format, parseISO, startOfDay, endOfDay, isBefore, isAfter, differenceInCalendarDays, differenceInSeconds } from "date-fns";
 
 import { ThemeColor, SavedRange } from '@/lib/types';
 
@@ -123,6 +123,7 @@ interface RangeSelectorProps {
   activeRangeId: string | null;
   onSelect: (rangeId: string) => void;
   onAdd: () => void;
+  onAddTemplate?: (template: 'sprint_2w' | 'quarter_3m' | 'travel') => void;
   onEdit: (range: SavedRange) => void;
   onDelete: (rangeId: string) => void;
   onDuplicate: (rangeId: string) => void;
@@ -146,6 +147,7 @@ export function RangeSelector({
   activeRangeId,
   onSelect,
   onAdd,
+  onAddTemplate,
   onEdit,
   onDelete,
   onDuplicate,
@@ -251,6 +253,46 @@ export function RangeSelector({
           </div>
 
           <div className="mt-2 border-t border-zinc-100 pt-2">
+            {onAddTemplate && (
+              <div className="mb-2">
+                <div className="mb-2 px-2 text-[11px] font-medium text-zinc-400">推荐模板</div>
+                <div className="grid gap-1 px-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onAddTemplate('sprint_2w');
+                      setIsOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                  >
+                    <span>🏃‍♂️ 短期冲刺</span>
+                    <span className="text-[11px] font-medium text-zinc-400">2周</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onAddTemplate('quarter_3m');
+                      setIsOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                  >
+                    <span>🎯 季度目标</span>
+                    <span className="text-[11px] font-medium text-zinc-400">3个月</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onAddTemplate('travel');
+                      setIsOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                  >
+                    <span>✈️ 旅行倒数</span>
+                    <span className="text-[11px] font-medium text-zinc-400">自定义</span>
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               onClick={() => {
                 onAdd();
@@ -314,6 +356,24 @@ function getRangeSummary(range: SavedRange, now: Date) {
   };
 }
 
+function getRangeProgressPercent(range: SavedRange, now: Date) {
+  try {
+    const start = startOfDay(parseISO(range.startISO));
+    const end = startOfDay(parseISO(range.endISO));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+    const today = startOfDay(now);
+    if (isAfter(today, end)) return 100;
+    if (isBefore(today, start)) return 0;
+    const totalSeconds = differenceInSeconds(endOfDay(end), start);
+    if (totalSeconds <= 0) return 100;
+    const elapsedSeconds = differenceInSeconds(now, start);
+    const pct = (elapsedSeconds / totalSeconds) * 100;
+    return Math.min(100, Math.max(0, pct));
+  } catch {
+    return 0;
+  }
+}
+
 function sortRangesByCreatedDesc(ranges: SavedRange[]) {
   return [...ranges].reverse();
 }
@@ -330,6 +390,7 @@ export function RangeNav({
   activeRangeId,
   onSelect,
   onAdd,
+  onAddTemplate,
   onEdit,
   onDelete,
   onDuplicate,
@@ -373,6 +434,7 @@ export function RangeNav({
           const isActive = range.id === activeRangeId;
           const theme = themeTokens[range.color || fallbackTheme] ?? themeTokens[fallbackTheme];
           const summary = getRangeSummary(range, now);
+          const progressPercent = getRangeProgressPercent(range, now);
 
           const statusPill =
             summary.status === 'active' ? (
@@ -402,7 +464,12 @@ export function RangeNav({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <div className="truncate font-medium">{range.name}</div>
-                      {statusPill}
+                      <div className="flex items-center gap-1">
+                        {range.isCompleted ? (
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">完成</span>
+                        ) : null}
+                        {statusPill}
+                      </div>
                     </div>
                     <div className={`mt-0.5 flex items-center justify-between text-[10px] ${
                       isActive ? "text-emerald-600/80" : "text-zinc-400"
@@ -411,6 +478,12 @@ export function RangeNav({
                         {safeFormatISODate(range.startISO)} - {safeFormatISODate(range.endISO)}
                       </span>
                       <span className="ml-2 shrink-0 tabular-nums">{summary.detail}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/70">
+                      <div
+                        className={`h-full bg-gradient-to-r ${theme.progressBarFrom} ${theme.progressBarTo}`}
+                        style={{ width: `${progressPercent}%` }}
+                      />
                     </div>
                   </div>
                 </div>
@@ -461,6 +534,47 @@ export function RangeNav({
           </div>
         )}
       </div>
+
+      {onAddTemplate && (
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-2">
+          <div className="px-1 pb-2 text-[11px] font-medium text-zinc-400">推荐模板</div>
+          <div className="grid gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                onAddTemplate('sprint_2w');
+                if (variant === 'drawer') onOpenChange?.(false);
+              }}
+              className="flex items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+            >
+              <span>🏃‍♂️ 短期冲刺</span>
+              <span className="text-[11px] font-medium text-zinc-400">2周</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onAddTemplate('quarter_3m');
+                if (variant === 'drawer') onOpenChange?.(false);
+              }}
+              className="flex items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+            >
+              <span>🎯 季度目标</span>
+              <span className="text-[11px] font-medium text-zinc-400">3个月</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onAddTemplate('travel');
+                if (variant === 'drawer') onOpenChange?.(false);
+              }}
+              className="flex items-center justify-between rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+            >
+              <span>✈️ 旅行倒数</span>
+              <span className="text-[11px] font-medium text-zinc-400">自定义</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       <button
         onClick={() => {

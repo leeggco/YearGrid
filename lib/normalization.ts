@@ -1,5 +1,5 @@
 import { format, parseISO, startOfDay, isAfter, endOfDay, differenceInSeconds, isBefore, differenceInCalendarDays } from 'date-fns';
-import { Entry, SavedRange } from './types';
+import { Entry, RangeMilestone, SavedRange } from './types';
 import { isBodyState, isThemeColor } from './utils';
 import { ViewMode } from '@/hooks/useYearProgress';
 
@@ -21,7 +21,7 @@ export function normalizeEntries(value: unknown) {
     const state = (entry as { state?: unknown }).state;
     const note = (entry as { note?: unknown }).note;
     if (!isBodyState(state)) continue;
-    const safeNote = typeof note === 'string' ? note.slice(0, 50) : '';
+    const safeNote = typeof note === 'string' ? note : '';
     if (state === 0 && safeNote.trim() === '') continue;
     next[isoDate] = { state, note: safeNote };
   }
@@ -39,6 +39,10 @@ export function normalizeRanges(value: unknown) {
     const endISO = (item as { endISO?: unknown }).endISO;
     const color = (item as { color?: unknown }).color;
     const entries = (item as { entries?: unknown }).entries;
+    const goal = (item as { goal?: unknown }).goal;
+    const milestones = (item as { milestones?: unknown }).milestones;
+    const isCompleted = (item as { isCompleted?: unknown }).isCompleted;
+    const completedAtISO = (item as { completedAtISO?: unknown }).completedAtISO;
     if (typeof id !== 'string' || typeof startISO !== 'string' || typeof endISO !== 'string') continue;
     const safeName = typeof name === 'string' ? name.trim() : '';
     try {
@@ -50,13 +54,36 @@ export function normalizeRanges(value: unknown) {
     }
     const safeColor = isThemeColor(color) ? color : undefined;
     const normalizedEntries = normalizeEntries(entries) ?? undefined;
+    const safeGoal = typeof goal === 'string' ? goal.trim() : '';
+    const safeMilestones: RangeMilestone[] = Array.isArray(milestones)
+      ? milestones
+          .map((m, i) => {
+            if (!m || typeof m !== 'object') return null;
+            const mid = (m as { id?: unknown }).id;
+            const text = (m as { text?: unknown }).text;
+            const done = (m as { done?: unknown }).done;
+            if (typeof text !== 'string') return null;
+            const safeText = text.trim();
+            if (!safeText) return null;
+            const safeId = typeof mid === 'string' && mid.trim() ? mid.trim() : `m_${i + 1}`;
+            return { id: safeId, text: safeText, ...(typeof done === 'boolean' ? { done } : {}) };
+          })
+          .filter((m): m is RangeMilestone => m !== null)
+          .slice(0, 20)
+      : [];
+    const safeIsCompleted = typeof isCompleted === 'boolean' ? isCompleted : undefined;
+    const safeCompletedAtISO = typeof completedAtISO === 'string' ? completedAtISO : undefined;
     cleaned.push({
       id,
       name: safeName || '区间',
       startISO,
       endISO,
       ...(safeColor ? { color: safeColor } : {}),
-      ...(normalizedEntries ? { entries: normalizedEntries } : {})
+      ...(normalizedEntries ? { entries: normalizedEntries } : {}),
+      ...(safeGoal ? { goal: safeGoal } : {}),
+      ...(safeMilestones.length ? { milestones: safeMilestones } : {}),
+      ...(safeIsCompleted !== undefined ? { isCompleted: safeIsCompleted } : {}),
+      ...(safeCompletedAtISO ? { completedAtISO: safeCompletedAtISO } : {})
     });
   }
   if (cleaned.length === 0) return [];
@@ -88,21 +115,26 @@ export function normalizeViewPref(value: unknown) {
   const customStartISO = (value as { customStartISO?: unknown }).customStartISO;
   const customEndISO = (value as { customEndISO?: unknown }).customEndISO;
   const activeRangeId = (value as { activeRangeId?: unknown }).activeRangeId;
+  const cellClickPreference = (value as { cellClickPreference?: unknown }).cellClickPreference;
   const safeMode: ViewMode | null =
     mode === 'year' || mode === 'month' || mode === 'week' || mode === 'range' ? mode : null;
+  const safeCellClickPreference: 'open' | 'quick_record' | null =
+    cellClickPreference === 'open' || cellClickPreference === 'quick_record' ? cellClickPreference : null;
   const normalized = {
     mode: safeMode,
     anchorISO: typeof anchorISO === 'string' ? anchorISO : null,
     customStartISO: typeof customStartISO === 'string' ? customStartISO : null,
     customEndISO: typeof customEndISO === 'string' ? customEndISO : null,
-    activeRangeId: typeof activeRangeId === 'string' ? activeRangeId : null
+    activeRangeId: typeof activeRangeId === 'string' ? activeRangeId : null,
+    cellClickPreference: safeCellClickPreference
   };
   if (
     !normalized.mode &&
     !normalized.anchorISO &&
     !normalized.customStartISO &&
     !normalized.customEndISO &&
-    !normalized.activeRangeId
+    !normalized.activeRangeId &&
+    !normalized.cellClickPreference
   ) {
     return null;
   }

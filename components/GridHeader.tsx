@@ -1,6 +1,7 @@
 'use client';
 
 import { format } from 'date-fns';
+import { useEffect, useState } from 'react';
 import { Legend } from '@/components/legend';
 import { RangeProgressHeader } from '@/components/RangeProgressHeader';
 import type { ViewMode } from '@/hooks/useYearProgress';
@@ -31,6 +32,24 @@ export function GridHeader({
   highlightHolidays,
   setHighlightHolidays
 }: GridHeaderProps) {
+  const [showRangeHint, setShowRangeHint] = useState(false);
+
+  useEffect(() => {
+    if (viewMode !== 'range') return;
+    try {
+      const seen = localStorage.getItem('yeargrid_range_hint_seen_v1') === '1';
+      if (seen) return;
+      localStorage.setItem('yeargrid_range_hint_seen_v1', '1');
+      setShowRangeHint(true);
+      const id = window.setTimeout(() => setShowRangeHint(false), 8000);
+      return () => window.clearTimeout(id);
+    } catch {
+      setShowRangeHint(true);
+      const id = window.setTimeout(() => setShowRangeHint(false), 8000);
+      return () => window.clearTimeout(id);
+    }
+  }, [viewMode]);
+
   if (viewMode === 'range' && activeRange && !isEditingRange) {
     return (
       <div className="mb-6 space-y-4">
@@ -42,6 +61,12 @@ export function GridHeader({
             onToggleHolidays={() => setHighlightHolidays(!highlightHolidays)}
           />
         </div>
+
+        {showRangeHint ? (
+          <div className="text-xs text-zinc-500">
+            篇章：自定义一段时间范围，用来做目标、阶段或倒数。
+          </div>
+        ) : null}
 
         <RangeProgressHeader range={activeRange} now={now} />
       </div>
@@ -59,12 +84,19 @@ export function GridHeader({
               ? '本周'
               : (isEditingRange ? rangeDraftName : activeRange?.name)?.trim() || '区间'}
       </div>
-      <Legend
-        showWeekends={highlightWeekends}
-        onToggleWeekends={() => setHighlightWeekends(!highlightWeekends)}
-        showHolidays={highlightHolidays}
-        onToggleHolidays={() => setHighlightHolidays(!highlightHolidays)}
-      />
+      <div className="flex flex-col items-end gap-1">
+        <Legend
+          showWeekends={highlightWeekends}
+          onToggleWeekends={() => setHighlightWeekends(!highlightWeekends)}
+          showHolidays={highlightHolidays}
+          onToggleHolidays={() => setHighlightHolidays(!highlightHolidays)}
+        />
+        {viewMode === 'range' && showRangeHint ? (
+          <div className="text-xs text-zinc-500">
+            篇章：自定义一段时间范围，用来做目标、阶段或倒数。
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

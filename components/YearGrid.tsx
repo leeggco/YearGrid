@@ -1,13 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
+  addDays,
+  addMonths,
   format,
   isAfter,
+  subDays,
   startOfDay
 } from 'date-fns';
 
-import { BodyState } from '@/lib/types';
+import { BodyState, Entry } from '@/lib/types';
 import type { YearDay } from '@/hooks/useYearProgress';
 import { useClampedTooltip } from '@/hooks/useClampedTooltip';
 import { useResponsiveGridLayout } from '@/hooks/useResponsiveGridLayout';
@@ -33,13 +38,24 @@ export default function YearGrid({
   holidays?: Record<string, string>;
   initialNowISO?: string;
 }) {
+  const searchParams = useSearchParams();
   const [isRangeNavOpen, setIsRangeNavOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [justSavedISO, setJustSavedISO] = useState<string | null>(null);
+  const justSavedTimerRef = useRef<number | null>(null);
+  const [undoToast, setUndoToast] = useState<
+    | {
+        isoDate: string;
+        entry: Entry;
+      }
+    | null
+  >(null);
+  const undoToastTimerRef = useRef<number | null>(null);
 
   const {
     viewMode, setViewMode,
@@ -52,18 +68,17 @@ export default function YearGrid({
     rangeDraftStartISO, setRangeDraftStartISO,
     rangeDraftEndISO, setRangeDraftEndISO,
     rangeDraftName, setRangeDraftName,
+    rangeDraftGoal, setRangeDraftGoal,
+    rangeDraftMilestones, setRangeDraftMilestones,
+    rangeDraftIsCompleted, setRangeDraftIsCompleted,
+    rangeDraftCompletedAtISO, setRangeDraftCompletedAtISO,
     entries,
     selectedISODate, setSelectedISODate,
     focusedISODate, setFocusedISODate,
     highlightWeekends, setHighlightWeekends,
     highlightHolidays, setHighlightHolidays,
-    highlightThisMonth, setHighlightThisMonth,
-    recordFilter, setRecordFilter,
-    noteOnly, setNoteOnly,
-    stateFilters,
-    noteQuery, setNoteQuery,
     guideDismissed,
-    showFilters, setShowFilters,
+    cellClickPreference, setCellClickPreference,
     isEditingRange, setIsEditingRange,
     isRangeEditing, isCreatingRange,
     rangeDraftColor, setRangeDraftColor,
@@ -72,14 +87,10 @@ export default function YearGrid({
     dragStartISO, setDragStartISO,
     dragCurrentISO, setDragCurrentISO,
     isDragging, setIsDragging,
-    setIOStatus,
     applyRangeDraftToActive,
     deleteActiveRange,
     beginCreateRange,
     cancelCreateRange,
-    toggleStateFilter,
-    clearFilters,
-    exportData,
     dismissGuide,
     startNewRange,
     updateEntry,
@@ -97,7 +108,7 @@ export default function YearGrid({
     }
   );
 
-  const { columns } = useResponsiveGridLayout({
+  const { columns, gridMaxWidth } = useResponsiveGridLayout({
     rootRef,
     headerRef,
     viewMode,
@@ -162,11 +173,6 @@ export default function YearGrid({
     todayStart
   ]);
 
-  const triggerImport = useCallback(() => {
-    setIOStatus(null);
-    importInputRef.current?.click();
-  }, [setIOStatus]);
-
   const percentText = useMemo(
     () => `${Math.floor(percent).toString()}%`,
     [percent]
@@ -223,6 +229,17 @@ export default function YearGrid({
     el?.focus();
   }, []);
 
+  useEffect(() => {
+    const date = searchParams.get('date');
+    if (!date) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setViewMode('month');
+    setAnchorISO(date);
+    setSelectedISODate(date);
+    setFocusedISODate(date);
+    requestAnimationFrame(() => focusCell(date));
+  }, [focusCell, searchParams, setAnchorISO, setFocusedISODate, setSelectedISODate, setViewMode]);
+
   const {
     handleCellFocus,
     handleCellBlur,
@@ -260,8 +277,6 @@ export default function YearGrid({
     focusCell,
   });
 
-  const effectiveHighlightThisMonth = viewMode === 'year' && highlightThisMonth;
-
   const guideVisible = useMemo(() => {
     if (guideDismissed) return false;
     return Object.keys(entries).length === 0;
@@ -282,6 +297,11 @@ export default function YearGrid({
     setRangeDraftStartISO(r.startISO);
     setRangeDraftEndISO(r.endISO);
     setRangeDraftName(r.name);
+    setRangeDraftColor(r.color || 'emerald');
+    setRangeDraftGoal(r.goal || '');
+    setRangeDraftMilestones(r.milestones || []);
+    setRangeDraftIsCompleted(!!r.isCompleted);
+    setRangeDraftCompletedAtISO(r.completedAtISO || null);
     setIsEditingRange(false);
     setIsRangeNavOpen(false);
   }, [
@@ -290,7 +310,12 @@ export default function YearGrid({
     setCustomEndISO,
     setCustomStartISO,
     setIsEditingRange,
+    setRangeDraftColor,
+    setRangeDraftCompletedAtISO,
     setRangeDraftEndISO,
+    setRangeDraftGoal,
+    setRangeDraftIsCompleted,
+    setRangeDraftMilestones,
     setRangeDraftName,
     setRangeDraftStartISO
   ]);
@@ -300,12 +325,40 @@ export default function YearGrid({
     setIsRangeNavOpen(false);
   }, [beginCreateRange]);
 
+  const handleAddRangeTemplate = useCallback((template: 'sprint_2w' | 'quarter_3m' | 'travel') => {
+    const base = startOfDay(now);
+    const startISO = format(base, 'yyyy-MM-dd');
+    const preset = (() => {
+      switch (template) {
+        case 'sprint_2w':
+          return { name: '短期冲刺', end: addDays(base, 13) };
+        case 'quarter_3m':
+          return { name: '季度目标', end: subDays(addMonths(base, 3), 1) };
+        default:
+          return { name: '旅行倒数', end: addDays(base, 6) };
+      }
+    })();
+    const endISO = format(preset.end, 'yyyy-MM-dd');
+    beginCreateRange({
+      startISO,
+      endISO,
+      setVisibleDefault: true,
+      prefillDraft: true,
+      name: preset.name
+    });
+    setIsRangeNavOpen(false);
+  }, [beginCreateRange, now]);
+
   const handleEditRange = useCallback((r: SavedRange) => {
     setActiveRangeId(r.id);
     setRangeDraftName(r.name);
     setRangeDraftStartISO(r.startISO);
     setRangeDraftEndISO(r.endISO);
     setRangeDraftColor(r.color || 'emerald');
+    setRangeDraftGoal(r.goal || '');
+    setRangeDraftMilestones(r.milestones || []);
+    setRangeDraftIsCompleted(!!r.isCompleted);
+    setRangeDraftCompletedAtISO(r.completedAtISO || null);
     setIsEditingRange(true);
     setRangeDraftSaving(false);
     setIsRangeNavOpen(false);
@@ -313,7 +366,11 @@ export default function YearGrid({
     setActiveRangeId,
     setIsEditingRange,
     setRangeDraftColor,
+    setRangeDraftCompletedAtISO,
     setRangeDraftEndISO,
+    setRangeDraftGoal,
+    setRangeDraftIsCompleted,
+    setRangeDraftMilestones,
     setRangeDraftName,
     setRangeDraftSaving,
     setRangeDraftStartISO
@@ -371,6 +428,98 @@ export default function YearGrid({
     }
   };
 
+  const flashSaved = useCallback((isoDate: string) => {
+    setJustSavedISO(isoDate);
+    if (justSavedTimerRef.current !== null) {
+      window.clearTimeout(justSavedTimerRef.current);
+    }
+    justSavedTimerRef.current = window.setTimeout(() => {
+      setJustSavedISO((prev) => (prev === isoDate ? null : prev));
+    }, 1200);
+  }, []);
+
+  const showUndoDeleteToast = useCallback((isoDate: string, entry: Entry) => {
+    setUndoToast({ isoDate, entry });
+    if (undoToastTimerRef.current !== null) {
+      window.clearTimeout(undoToastTimerRef.current);
+    }
+    undoToastTimerRef.current = window.setTimeout(() => {
+      setUndoToast(null);
+    }, 5000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (justSavedTimerRef.current !== null) {
+        window.clearTimeout(justSavedTimerRef.current);
+      }
+      if (undoToastTimerRef.current !== null) {
+        window.clearTimeout(undoToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleUpdateEntry = useCallback(
+    (isoDate: string, state: BodyState, note: string) => {
+      updateEntry(isoDate, state, note);
+      flashSaved(isoDate);
+    },
+    [flashSaved, updateEntry]
+  );
+
+  const handleDeleteEntryWithUndo = useCallback(
+    (isoDate: string) => {
+      const entry = entries[isoDate] ?? null;
+      deleteEntry(isoDate);
+      if (entry) showUndoDeleteToast(isoDate, entry);
+    },
+    [deleteEntry, entries, showUndoDeleteToast]
+  );
+
+  const handleUndoDelete = useCallback(() => {
+    if (!undoToast) return;
+    handleUpdateEntry(undoToast.isoDate, undoToast.entry.state, undoToast.entry.note);
+    setUndoToast(null);
+  }, [handleUpdateEntry, undoToast]);
+
+  const cycleEntryState = useCallback(
+    (isoDate: string) => {
+      const current = (entries[isoDate]?.state ?? 0) as BodyState;
+      const next = ((current + 1) % 6) as BodyState;
+      if (next === 0) {
+        deleteEntry(isoDate);
+        flashSaved(isoDate);
+        return;
+      }
+      handleUpdateEntry(isoDate, next, entries[isoDate]?.note ?? '');
+    },
+    [deleteEntry, entries, flashSaved, handleUpdateEntry]
+  );
+
+  const handleCellClickWithQuickRecord = useCallback(
+    (day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
+      if (cellClickPreference === 'quick_record') {
+        if (e.shiftKey) {
+          handleCellClick(day);
+          return;
+        }
+        if (viewMode === 'range' && isEditingRange) return;
+        setFocusedISODate(day.isoDate);
+        cycleEntryState(day.isoDate);
+        return;
+      }
+
+      if (e.shiftKey) {
+        if (viewMode === 'range' && isEditingRange) return;
+        setFocusedISODate(day.isoDate);
+        cycleEntryState(day.isoDate);
+        return;
+      }
+      handleCellClick(day);
+    },
+    [cellClickPreference, cycleEntryState, handleCellClick, isEditingRange, setFocusedISODate, viewMode]
+  );
+
   return (
     <div ref={rootRef} className="relative flex w-full flex-col">
       <header ref={headerRef} className="mb-8">
@@ -395,18 +544,8 @@ export default function YearGrid({
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             now={now}
-            showFilters={showFilters}
-            setShowFilters={setShowFilters}
-            highlightWeekends={highlightWeekends}
-            setHighlightWeekends={setHighlightWeekends}
-            highlightHolidays={highlightHolidays}
-            setHighlightHolidays={setHighlightHolidays}
-            highlightThisMonth={highlightThisMonth}
-            setHighlightThisMonth={setHighlightThisMonth}
-            noteOnly={noteOnly}
-            setNoteOnly={setNoteOnly}
-            recordFilter={recordFilter}
-            setRecordFilter={setRecordFilter}
+            cellClickPreference={cellClickPreference}
+            setCellClickPreference={setCellClickPreference}
             ranges={ranges}
             activeRangeId={activeRangeId}
             setActiveRangeId={setActiveRangeId}
@@ -418,6 +557,14 @@ export default function YearGrid({
             setRangeDraftName={setRangeDraftName}
             rangeDraftColor={rangeDraftColor}
             setRangeDraftColor={setRangeDraftColor}
+            rangeDraftGoal={rangeDraftGoal}
+            setRangeDraftGoal={setRangeDraftGoal}
+            rangeDraftMilestones={rangeDraftMilestones}
+            setRangeDraftMilestones={setRangeDraftMilestones}
+            rangeDraftIsCompleted={rangeDraftIsCompleted}
+            setRangeDraftIsCompleted={setRangeDraftIsCompleted}
+            rangeDraftCompletedAtISO={rangeDraftCompletedAtISO}
+            setRangeDraftCompletedAtISO={setRangeDraftCompletedAtISO}
             rangeDraftStartISO={rangeDraftStartISO}
             setRangeDraftStartISO={setRangeDraftStartISO}
             rangeDraftEndISO={rangeDraftEndISO}
@@ -434,13 +581,6 @@ export default function YearGrid({
             setCustomStartISO={setCustomStartISO}
             customEndISO={customEndISO}
             setCustomEndISO={setCustomEndISO}
-            stateFilters={stateFilters}
-            toggleStateFilter={toggleStateFilter}
-            noteQuery={noteQuery}
-            setNoteQuery={setNoteQuery}
-            clearFilters={clearFilters}
-            exportData={exportData}
-            triggerImport={triggerImport}
             openRangeNav={() => setIsRangeNavOpen(true)}
           />
         </div>
@@ -468,6 +608,7 @@ export default function YearGrid({
                     activeRangeId={activeRangeId}
                     onSelect={handleSelectRange}
                     onAdd={handleAddRange}
+                    onAddTemplate={handleAddRangeTemplate}
                     onEdit={handleEditRange}
                     onDelete={handleDeleteRange}
                     onDuplicate={handleDuplicateRange}
@@ -488,39 +629,43 @@ export default function YearGrid({
                     setHighlightHolidays={setHighlightHolidays}
                   />
 
-                  <YearGridBody
-                    viewMode={viewMode}
-                    days={days}
-                    columns={columns}
-                    gridGap={gridGap}
-                    entries={entries}
-                    selectedISODate={selectedISODate}
-                    focusedISODate={focusedISODate}
-                    highlightWeekends={highlightWeekends}
-                    highlightHolidays={highlightHolidays}
-                    effectiveHighlightThisMonth={effectiveHighlightThisMonth}
-                    currentMonth={currentMonth}
-                    recordFilter={recordFilter}
-                    noteOnly={noteOnly}
-                    stateFilters={stateFilters}
-                    noteQuery={noteQuery}
-                    isDragging={isDragging}
-                    dragStartISO={dragStartISO}
-                    dragCurrentISO={dragCurrentISO}
-                    isRangeEditing={isRangeEditing}
-                    rangeDraftColor={rangeDraftColor}
-                    rangeDraftStartISO={rangeDraftStartISO}
-                    rangeDraftEndISO={rangeDraftEndISO}
-                    onCellHover={handleCellHover}
-                    onCellMove={handleCellMove}
-                    onCellLeave={handleCellLeave}
-                    onCellFocus={handleCellFocus}
-                    onCellBlur={handleCellBlur}
-                    onCellKeyDown={handleCellKeyDown}
-                    onCellClick={handleCellClick}
-                    onCellMouseDown={handleCellMouseDown}
-                    onCellMouseUp={handleCellMouseUp}
-                  />
+                  <div
+                    ref={gridRef}
+                    style={
+                      gridMaxWidth
+                        ? { maxWidth: `${gridMaxWidth}px`, marginLeft: 'auto', marginRight: 'auto' }
+                        : undefined
+                    }
+                  >
+                    <YearGridBody
+                      viewMode={viewMode}
+                      days={days}
+                      columns={columns}
+                      gridGap={gridGap}
+                      entries={entries}
+                      selectedISODate={selectedISODate}
+                      focusedISODate={focusedISODate}
+                      highlightWeekends={highlightWeekends}
+                      highlightHolidays={highlightHolidays}
+                      currentMonth={currentMonth}
+                      isDragging={isDragging}
+                      dragStartISO={dragStartISO}
+                      dragCurrentISO={dragCurrentISO}
+                      isRangeEditing={isRangeEditing}
+                      rangeDraftColor={rangeDraftColor}
+                      rangeDraftStartISO={rangeDraftStartISO}
+                      rangeDraftEndISO={rangeDraftEndISO}
+                      onCellHover={handleCellHover}
+                      onCellMove={handleCellMove}
+                      onCellLeave={handleCellLeave}
+                      onCellFocus={handleCellFocus}
+                      onCellBlur={handleCellBlur}
+                      onCellKeyDown={handleCellKeyDown}
+                      onCellClick={handleCellClickWithQuickRecord}
+                      onCellMouseDown={handleCellMouseDown}
+                      onCellMouseUp={handleCellMouseUp}
+                    />
+                  </div>
                 </div>
 
                 <RangeNav
@@ -532,6 +677,7 @@ export default function YearGrid({
                   activeRangeId={activeRangeId}
                   onSelect={handleSelectRange}
                   onAdd={handleAddRange}
+                  onAddTemplate={handleAddRangeTemplate}
                   onEdit={handleEditRange}
                   onDelete={handleDeleteRange}
                   onDuplicate={handleDuplicateRange}
@@ -552,44 +698,59 @@ export default function YearGrid({
                   setHighlightHolidays={setHighlightHolidays}
                 />
 
-                <YearGridBody
-                  viewMode={viewMode}
-                  days={days}
-                  columns={columns}
-                  gridGap={gridGap}
-                  entries={entries}
-                  selectedISODate={selectedISODate}
-                  focusedISODate={focusedISODate}
-                  highlightWeekends={highlightWeekends}
-                  highlightHolidays={highlightHolidays}
-                  effectiveHighlightThisMonth={effectiveHighlightThisMonth}
-                  currentMonth={currentMonth}
-                  recordFilter={recordFilter}
-                  noteOnly={noteOnly}
-                  stateFilters={stateFilters}
-                  noteQuery={noteQuery}
-                  isDragging={isDragging}
-                  dragStartISO={dragStartISO}
-                  dragCurrentISO={dragCurrentISO}
-                  isRangeEditing={isRangeEditing}
-                  rangeDraftColor={rangeDraftColor}
-                  rangeDraftStartISO={rangeDraftStartISO}
-                  rangeDraftEndISO={rangeDraftEndISO}
-                  onCellHover={handleCellHover}
-                  onCellMove={handleCellMove}
-                  onCellLeave={handleCellLeave}
-                  onCellFocus={handleCellFocus}
-                  onCellBlur={handleCellBlur}
-                  onCellKeyDown={handleCellKeyDown}
-                  onCellClick={handleCellClick}
-                  onCellMouseDown={handleCellMouseDown}
-                  onCellMouseUp={handleCellMouseUp}
-                />
+                <div ref={gridRef}>
+                  <YearGridBody
+                    viewMode={viewMode}
+                    days={days}
+                    columns={columns}
+                    gridGap={gridGap}
+                    entries={entries}
+                    selectedISODate={selectedISODate}
+                    focusedISODate={focusedISODate}
+                    highlightWeekends={highlightWeekends}
+                    highlightHolidays={highlightHolidays}
+                    currentMonth={currentMonth}
+                    isDragging={isDragging}
+                    dragStartISO={dragStartISO}
+                    dragCurrentISO={dragCurrentISO}
+                    isRangeEditing={isRangeEditing}
+                    rangeDraftColor={rangeDraftColor}
+                    rangeDraftStartISO={rangeDraftStartISO}
+                    rangeDraftEndISO={rangeDraftEndISO}
+                    onCellHover={handleCellHover}
+                    onCellMove={handleCellMove}
+                    onCellLeave={handleCellLeave}
+                    onCellFocus={handleCellFocus}
+                    onCellBlur={handleCellBlur}
+                    onCellKeyDown={handleCellKeyDown}
+                    onCellClick={handleCellClickWithQuickRecord}
+                    onCellMouseDown={handleCellMouseDown}
+                    onCellMouseUp={handleCellMouseUp}
+                  />
+                </div>
               </>
             )}
           </div>
         )}
       </div>
+
+      {undoToast ? (
+        <div className="fixed bottom-4 right-4 z-50 max-w-[90vw]">
+          <div className="flex items-center gap-3 rounded-xl border border-zinc-200/70 bg-white/90 px-4 py-3 text-sm text-zinc-900 shadow-[0_18px_60px_rgba(0,0,0,0.14)] backdrop-blur-xl">
+            <div className="min-w-0">
+              <div className="font-medium">已删除记录</div>
+              <div className="mt-0.5 text-xs text-zinc-500 tabular-nums">{undoToast.isoDate}</div>
+            </div>
+            <button
+              type="button"
+              onClick={handleUndoDelete}
+              className="shrink-0 rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+            >
+              撤销
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {tooltip ? (
         <DayTooltip
@@ -607,14 +768,15 @@ export default function YearGrid({
           modalRef={modalRef as React.LegacyRef<HTMLDivElement>}
           onClose={() => setSelectedISODate(null)}
           activeStateButtonClass={activeStateButtonClass}
+          justSaved={justSavedISO === selectedDay.isoDate}
           onStateChange={(state) => {
-            updateEntry(selectedDay.isoDate, state, selectedEntry?.note ?? '');
+            handleUpdateEntry(selectedDay.isoDate, state, selectedEntry?.note ?? '');
           }}
           onNoteChange={(note) => {
-            updateEntry(selectedDay.isoDate, selectedEntry?.state ?? 0, note);
+            handleUpdateEntry(selectedDay.isoDate, selectedEntry?.state ?? 0, note);
           }}
           onDelete={() => {
-            deleteEntry(selectedDay.isoDate);
+            handleDeleteEntryWithUndo(selectedDay.isoDate);
             setSelectedISODate(null);
           }}
         />

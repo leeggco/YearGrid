@@ -15,10 +15,10 @@ export function Guide({ visible, onDismiss }: GuideProps) {
       <div className="flex items-start justify-between">
         <div>
           <div className="text-xs font-medium text-zinc-900">
-            点击格子记录体感（1–5）
+            点击格子打开记录（体感 1–5）
           </div>
           <div className="mt-1 text-[10px] text-zinc-500">
-            支持添加备注，或使用过滤功能快速查看特定日期
+            支持备注与筛选；Shift+点击可快速切换体感
           </div>
         </div>
         <button

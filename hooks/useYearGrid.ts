@@ -1,21 +1,20 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { format, startOfDay, parseISO, isAfter, isBefore, addDays } from 'date-fns';
-import { ViewMode, YearDay } from './useYearProgress';
-import { BodyState, Entry } from '@/lib/types';
+import { ViewMode } from './useYearProgress';
+import { BodyState, CellClickPreference, Entry, RangeMilestone } from '@/lib/types';
 import { SavedRange, ThemeColor } from '@/components/RangeSelector';
-import { makeUniqueRangeName, safeParseJSON, clamp } from '@/lib/utils';
+import { makeUniqueRangeName, safeParseJSON } from '@/lib/utils';
 import { 
   normalizeEntries, 
   normalizeRanges, 
-  normalizeViewPref, 
-  mergeRanges 
+  normalizeViewPref
 } from '@/lib/normalization';
 
 interface UseYearGridOptions {
   initialNowISO?: string;
 }
 
-export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
+export function useYearGrid({}: UseYearGridOptions) {
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [anchorISO, setAnchorISO] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [customStartISO, setCustomStartISO] = useState('');
@@ -31,22 +30,20 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
   const [entriesLoaded, setEntriesLoaded] = useState(false);
   const [selectedISODate, setSelectedISODate] = useState<string | null>(null);
   const [focusedISODate, setFocusedISODate] = useState<string | null>(null);
-  const [highlightWeekends, setHighlightWeekends] = useState(false);
-  const [highlightHolidays, setHighlightHolidays] = useState(false);
-  const [highlightThisMonth, setHighlightThisMonth] = useState(false);
-  const [recordFilter, setRecordFilter] = useState<'all' | 'recorded' | 'unrecorded'>('all');
-  const [noteOnly, setNoteOnly] = useState(false);
-  const [stateFilters, setStateFilters] = useState<BodyState[]>([]);
-  const [noteQuery, setNoteQuery] = useState('');
+  const [highlightWeekends, setHighlightWeekends] = useState(true);
+  const [highlightHolidays, setHighlightHolidays] = useState(true);
   const [guideDismissed, setGuideDismissed] = useState(true);
-  const [showFilters, setShowFilters] = useState(false);
+  const [cellClickPreference, setCellClickPreference] = useState<CellClickPreference>('open');
   const [isEditingRange, setIsEditingRange] = useState(false);
   const [rangeDraftColor, setRangeDraftColor] = useState<ThemeColor>('emerald');
+  const [rangeDraftGoal, setRangeDraftGoal] = useState('');
+  const [rangeDraftMilestones, setRangeDraftMilestones] = useState<RangeMilestone[]>([]);
+  const [rangeDraftIsCompleted, setRangeDraftIsCompleted] = useState(false);
+  const [rangeDraftCompletedAtISO, setRangeDraftCompletedAtISO] = useState<string | null>(null);
   const [rangeDraftSaving, setRangeDraftSaving] = useState(false);
   const [dragStartISO, setDragStartISO] = useState<string | null>(null);
   const [dragCurrentISO, setDragCurrentISO] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [ioStatus, setIOStatus] = useState<{ kind: 'ok' | 'error'; message: string } | null>(null);
 
   const prevActiveRangeIdRef = useRef<string | null>(null);
   const createOriginActiveRangeIdRef = useRef<string | null>(null);
@@ -136,6 +133,11 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
         setRangeDraftStartISO(found.startISO);
         setRangeDraftEndISO(found.endISO);
         setRangeDraftName(found.name);
+        setRangeDraftColor(found.color || 'emerald');
+        setRangeDraftGoal(found.goal || '');
+        setRangeDraftMilestones(found.milestones || []);
+        setRangeDraftIsCompleted(!!found.isCompleted);
+        setRangeDraftCompletedAtISO(found.completedAtISO || null);
         setEntries(found.entries || {});
       }
     } else {
@@ -145,6 +147,7 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     if (pref) {
       if (pref.mode) setViewMode(pref.mode);
       if (pref.anchorISO) setAnchorISO(pref.anchorISO);
+      if (pref.cellClickPreference) setCellClickPreference(pref.cellClickPreference);
     }
 
     setEntriesLoaded(true);
@@ -182,6 +185,11 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     setRangeDraftStartISO(found.startISO);
     setRangeDraftEndISO(found.endISO);
     setRangeDraftName(found.name);
+    setRangeDraftColor(found.color || 'emerald');
+    setRangeDraftGoal(found.goal || '');
+    setRangeDraftMilestones(found.milestones || []);
+    setRangeDraftIsCompleted(!!found.isCompleted);
+    setRangeDraftCompletedAtISO(found.completedAtISO || null);
   }, [activeRangeId, ranges, rangesLoaded]);
 
   useEffect(() => {
@@ -191,9 +199,10 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
       anchorISO,
       customStartISO,
       customEndISO,
-      activeRangeId
+      activeRangeId,
+      cellClickPreference
     }));
-  }, [activeRangeId, anchorISO, customEndISO, customStartISO, viewMode, viewPrefLoaded]);
+  }, [activeRangeId, anchorISO, cellClickPreference, customEndISO, customStartISO, viewMode, viewPrefLoaded]);
 
   // Handlers
   const applyRangeDraftToActive = useCallback(() => {
@@ -201,21 +210,59 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     setCustomStartISO(rangeDraftStartISO);
     setCustomEndISO(rangeDraftEndISO);
     const desiredName = rangeDraftName.trim() || '新篇章';
+    const safeGoal = rangeDraftGoal.trim() || undefined;
+    const safeMilestones = rangeDraftMilestones.filter((m) => m.text.trim()).slice(0, 20);
+    const safeIsCompleted = rangeDraftIsCompleted ? true : undefined;
+    const safeCompletedAtISO = rangeDraftIsCompleted
+      ? (rangeDraftCompletedAtISO ?? new Date().toISOString())
+      : undefined;
 
     if (!activeRangeId) {
       const id = `range_${Date.now()}`;
       setRanges((prev) => {
         const name = makeUniqueRangeName(desiredName, prev);
-        return [...prev, { id, name, startISO: rangeDraftStartISO, endISO: rangeDraftEndISO, color: rangeDraftColor }];
+        return [
+          ...prev,
+          {
+            id,
+            name,
+            startISO: rangeDraftStartISO,
+            endISO: rangeDraftEndISO,
+            color: rangeDraftColor,
+            ...(safeGoal ? { goal: safeGoal } : {}),
+            ...(safeMilestones.length ? { milestones: safeMilestones } : {}),
+            ...(safeIsCompleted ? { isCompleted: safeIsCompleted } : {}),
+            ...(safeCompletedAtISO ? { completedAtISO: safeCompletedAtISO } : {})
+          }
+        ];
       });
       setActiveRangeId(id);
       return;
     }
 
     setRanges((prev) => prev.map((r) => r.id === activeRangeId ? {
-      ...r, name: desiredName, startISO: rangeDraftStartISO, endISO: rangeDraftEndISO, color: rangeDraftColor
+      ...r,
+      name: desiredName,
+      startISO: rangeDraftStartISO,
+      endISO: rangeDraftEndISO,
+      color: rangeDraftColor,
+      ...(safeGoal ? { goal: safeGoal } : { goal: undefined }),
+      milestones: safeMilestones.length ? safeMilestones : undefined,
+      isCompleted: safeIsCompleted,
+      completedAtISO: safeCompletedAtISO
     } : r));
-  }, [activeRangeId, rangeDraftColor, rangeDraftEndISO, rangeDraftName, rangeDraftStartISO, rangeDraftValid]);
+  }, [
+    activeRangeId,
+    rangeDraftColor,
+    rangeDraftCompletedAtISO,
+    rangeDraftEndISO,
+    rangeDraftGoal,
+    rangeDraftIsCompleted,
+    rangeDraftMilestones,
+    rangeDraftName,
+    rangeDraftStartISO,
+    rangeDraftValid
+  ]);
 
   const deleteActiveRange = useCallback(() => {
     if (!activeRangeId) return;
@@ -240,7 +287,7 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     setIsEditingRange(false);
   }, [activeRangeId, ranges]);
 
-  const beginCreateRange = useCallback((options?: { startISO?: string; endISO?: string; setVisibleDefault?: boolean }) => {
+  const beginCreateRange = useCallback((options?: { startISO?: string; endISO?: string; setVisibleDefault?: boolean; prefillDraft?: boolean; name?: string }) => {
     const base = startOfDay(new Date());
     const startISO = options?.startISO ?? format(base, 'yyyy-MM-dd');
     const endISO = options?.endISO ?? format(addDays(base, 100), 'yyyy-MM-dd');
@@ -254,10 +301,14 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     }
 
     setActiveRangeId(null);
-    setRangeDraftName(makeUniqueRangeName('新篇章', ranges));
-    setRangeDraftStartISO('');
-    setRangeDraftEndISO('');
+    setRangeDraftName(makeUniqueRangeName(options?.name?.trim() || '新篇章', ranges));
+    setRangeDraftStartISO(options?.prefillDraft ? startISO : '');
+    setRangeDraftEndISO(options?.prefillDraft ? endISO : '');
     setRangeDraftColor('emerald');
+    setRangeDraftGoal('');
+    setRangeDraftMilestones([]);
+    setRangeDraftIsCompleted(false);
+    setRangeDraftCompletedAtISO(null);
     setIsEditingRange(true);
     setRangeDraftSaving(false);
   }, [activeRangeId, customEndISO, customStartISO, ranges]);
@@ -269,6 +320,10 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     setDragCurrentISO(null);
     setRangeDraftName('');
     setRangeDraftColor('emerald');
+    setRangeDraftGoal('');
+    setRangeDraftMilestones([]);
+    setRangeDraftIsCompleted(false);
+    setRangeDraftCompletedAtISO(null);
     setRangeDraftSaving(false);
     setIsEditingRange(false);
     setActiveRangeId(createOriginActiveRangeIdRef.current);
@@ -281,143 +336,6 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     createOriginCustomStartISORef.current = null;
     createOriginCustomEndISORef.current = null;
   }, [activeRangeId, isRangeEditing]);
-
-  const toggleStateFilter = useCallback((state: BodyState) => {
-    if (state === 0) return;
-    setStateFilters((prev) => {
-      const exists = prev.includes(state);
-      const next = exists ? prev.filter((s) => s !== state) : [...prev, state];
-      next.sort((a, b) => a - b);
-      return next;
-    });
-  }, []);
-
-  const clearFilters = useCallback(() => {
-    setHighlightWeekends(false);
-    setHighlightHolidays(false);
-    setHighlightThisMonth(false);
-    setRecordFilter('all');
-    setNoteOnly(false);
-    setStateFilters([]);
-    setNoteQuery('');
-  }, []);
-
-  const exportData = useCallback(() => {
-    const payload = {
-      version: 1,
-      exportedAtISO: new Date().toISOString(),
-      entries,
-      ranges,
-      viewPref: { mode: viewMode, anchorISO, customStartISO, customEndISO, activeRangeId },
-      guideDismissed
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `yeargrid_backup_${format(new Date(), 'yyyyMMdd_HHmmss')}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
-    setIOStatus({ kind: 'ok', message: '已导出备份文件。' });
-  }, [activeRangeId, anchorISO, customEndISO, customStartISO, entries, guideDismissed, ranges, viewMode]);
-
-  const onImportFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0] ?? null;
-      e.target.value = '';
-      if (!file) return;
-
-      if (file.size > 5 * 1024 * 1024) {
-        setIOStatus({ kind: 'error', message: '导入失败：文件过大（请使用 5MB 以内）。' });
-        return;
-      }
-
-      let raw = '';
-      try {
-        raw = await file.text();
-      } catch {
-        setIOStatus({ kind: 'error', message: '导入失败：无法读取文件内容。' });
-        return;
-      }
-
-      const parsed = safeParseJSON(raw);
-      if (!parsed || typeof parsed !== 'object') {
-        setIOStatus({ kind: 'error', message: '导入失败：文件不是有效的 JSON 对象。' });
-        return;
-      }
-
-      const root = parsed as Record<string, unknown>;
-      const importedEntries = normalizeEntries(root.entries ?? root);
-      const importedRanges = normalizeRanges(root.ranges);
-      const importedPref = normalizeViewPref(root.viewPref ?? root);
-
-      const hasEntries = !!(importedEntries && Object.keys(importedEntries).length > 0);
-      const hasRanges = importedRanges !== null && importedRanges.length > 0;
-      const hasPref = importedPref !== null;
-      const hasGuide = typeof root.guideDismissed === 'boolean';
-
-      if (!hasEntries && !hasRanges && !hasPref && !hasGuide) {
-        setIOStatus({ kind: 'error', message: '导入失败：未识别到可用数据。' });
-        return;
-      }
-
-      const overwrite = window.confirm('导入会覆盖本地数据。确定=覆盖；取消=合并。');
-
-      const nextEntries: Record<string, Entry> = overwrite
-        ? importedEntries ?? {}
-        : {
-            ...entries,
-            ...(importedEntries ?? {})
-          };
-
-      const nextRanges: SavedRange[] =
-        importedRanges && importedRanges.length > 0
-          ? overwrite
-            ? importedRanges
-            : mergeRanges(ranges, importedRanges)
-          : ranges;
-
-      setEntries(nextEntries);
-      if (importedRanges && importedRanges.length > 0) {
-        setRanges(nextRanges);
-      }
-
-      if (overwrite && importedPref) {
-        if (importedPref.mode) setViewMode(importedPref.mode);
-        if (importedPref.anchorISO) setAnchorISO(importedPref.anchorISO);
-
-        const preferActive = importedPref.activeRangeId
-          ? nextRanges.find((r) => r.id === importedPref.activeRangeId) ?? null
-          : null;
-
-        if (preferActive) {
-          setActiveRangeId(preferActive.id);
-          setCustomStartISO(preferActive.startISO);
-          setCustomEndISO(preferActive.endISO);
-          setRangeDraftStartISO(preferActive.startISO);
-          setRangeDraftEndISO(preferActive.endISO);
-          setRangeDraftName(preferActive.name);
-        } else if (importedPref.customStartISO && importedPref.customEndISO) {
-          setActiveRangeId(null);
-          setCustomStartISO(importedPref.customStartISO);
-          setCustomEndISO(importedPref.customEndISO);
-          setRangeDraftStartISO(importedPref.customStartISO);
-          setRangeDraftEndISO(importedPref.customEndISO);
-          setRangeDraftName('');
-        }
-      }
-
-      if (typeof root.guideDismissed === 'boolean') {
-        setGuideDismissed(root.guideDismissed);
-      }
-
-      setIsEditingRange(false);
-      setIOStatus({ kind: 'ok', message: overwrite ? '导入完成：已覆盖本地数据。' : '导入完成：已合并本地数据。' });
-    },
-    [entries, ranges]
-  );
 
   return {
     viewMode, setViewMode,
@@ -435,30 +353,24 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
     focusedISODate, setFocusedISODate,
     highlightWeekends, setHighlightWeekends,
     highlightHolidays, setHighlightHolidays,
-    highlightThisMonth, setHighlightThisMonth,
-    recordFilter, setRecordFilter,
-    noteOnly, setNoteOnly,
-    stateFilters, setStateFilters,
-    noteQuery, setNoteQuery,
     guideDismissed, setGuideDismissed,
-    showFilters, setShowFilters,
+    cellClickPreference, setCellClickPreference,
     isEditingRange, setIsEditingRange,
     isRangeEditing, isCreatingRange,
     rangeDraftColor, setRangeDraftColor,
+    rangeDraftGoal, setRangeDraftGoal,
+    rangeDraftMilestones, setRangeDraftMilestones,
+    rangeDraftIsCompleted, setRangeDraftIsCompleted,
+    rangeDraftCompletedAtISO, setRangeDraftCompletedAtISO,
     rangeDraftSaving, setRangeDraftSaving,
     rangeDraftValid,
     dragStartISO, setDragStartISO,
     dragCurrentISO, setDragCurrentISO,
     isDragging, setIsDragging,
-    ioStatus, setIOStatus,
     applyRangeDraftToActive,
     deleteActiveRange,
     beginCreateRange,
     cancelCreateRange,
-    toggleStateFilter,
-    clearFilters,
-    exportData,
-    onImportFileChange,
     dismissGuide: () => {
       localStorage.setItem('yeargrid_guide_dismissed_v1', '1');
       setGuideDismissed(true);
@@ -472,7 +384,7 @@ export function useYearGrid({ initialNowISO }: UseYearGridOptions) {
         ...prev,
         [isoDate]: {
           state,
-          note: note.slice(0, 50),
+          note,
           updatedAtISO: new Date().toISOString()
         }
       }));

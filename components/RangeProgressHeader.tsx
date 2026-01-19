@@ -81,6 +81,7 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
         <div>
           <h2 className="text-2xl font-bold text-zinc-900 flex items-center gap-2">
             {range.name}
+            {range.isCompleted && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">已完成</span>}
             {stats.isEnded && <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500 font-medium">已结束</span>}
             {stats.isUpcoming && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">未开始</span>}
             {!stats.isEnded && !stats.isUpcoming && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${theme.progressTag}`}>进行中</span>}
@@ -90,6 +91,30 @@ export function RangeProgressHeader({ range, now }: RangeProgressHeaderProps) {
             <span className="mx-2">·</span>
             共 {stats.totalDays} 天
           </div>
+          {range.goal ? (
+            <div className="mt-2 text-sm font-medium text-zinc-900">
+              {range.goal}
+            </div>
+          ) : null}
+          {range.milestones && range.milestones.length > 0 ? (
+            <div className="mt-2">
+              <div className="text-xs font-medium text-zinc-500">
+                里程碑 {range.milestones.filter((m) => !!m.done).length}/{range.milestones.length}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {range.milestones.slice(0, 8).map((m) => (
+                  <span
+                    key={m.id}
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      m.done ? 'bg-emerald-50 text-emerald-700' : 'bg-zinc-100 text-zinc-700'
+                    }`}
+                  >
+                    {m.text}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* Big Stats */}

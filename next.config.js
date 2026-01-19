@@ -2,6 +2,7 @@ const path = require('path');
 const os = require('os');
 
 const nextConfig = {
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   reactStrictMode: true,
   webpack: (config) => {
     config.resolve.alias = {

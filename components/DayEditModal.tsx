@@ -14,6 +14,7 @@ interface DayEditModalProps {
   onNoteChange: (note: string) => void;
   activeStateButtonClass: (state: BodyState) => string;
   onDelete: () => void;
+  justSaved?: boolean;
 }
 
 export function DayEditModal({
@@ -24,7 +25,8 @@ export function DayEditModal({
   onStateChange,
   onNoteChange,
   activeStateButtonClass,
-  onDelete
+  onDelete,
+  justSaved
 }: DayEditModalProps) {
   const currentNote = selectedEntry?.note ?? '';
 
@@ -58,6 +60,9 @@ export function DayEditModal({
               体感：{BODY_STATE_TEXT[(selectedEntry?.state ?? 0) as BodyState]}
             </div>
           </div>
+          <div className="min-h-[18px] text-xs font-medium text-emerald-600">
+            {justSaved ? '已保存' : null}
+          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
@@ -90,12 +95,12 @@ export function DayEditModal({
         </div>
 
         <div className="mt-4">
-          <input
-            type="text"
-            placeholder="写点什么（可选，限 50 字）..."
+          <textarea
+            placeholder="写点什么（可选）..."
             value={currentNote}
             onChange={(e) => onNoteChange(e.target.value)}
-            className="w-full rounded-xl border border-zinc-200/60 bg-white/50 px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 outline-none ring-zinc-900/5 transition focus:border-zinc-900/20 focus:bg-white focus:ring-4"
+            rows={4}
+            className="w-full resize-none rounded-xl border border-zinc-200/60 bg-white/50 px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 outline-none ring-zinc-900/5 transition focus:border-zinc-900/20 focus:bg-white focus:ring-4"
           />
         </div>
 
