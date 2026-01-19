@@ -1,6 +1,6 @@
 'use client';
 
-import { LegacyRef } from 'react';
+import { LegacyRef, useState } from 'react';
 import { YearDay } from '@/hooks/useYearProgress';
 import { BodyState, Entry } from '@/lib/types';
 import { BODY_STATE_META, BODY_STATE_TEXT } from '@/lib/constants';
@@ -15,6 +15,8 @@ interface DayEditModalProps {
   activeStateButtonClass: (state: BodyState) => string;
   onDelete: () => void;
   justSaved?: boolean;
+  onSave: () => Promise<boolean>;
+  saveDisabled: boolean;
 }
 
 export function DayEditModal({
@@ -26,9 +28,12 @@ export function DayEditModal({
   onNoteChange,
   activeStateButtonClass,
   onDelete,
-  justSaved
+  justSaved,
+  onSave,
+  saveDisabled
 }: DayEditModalProps) {
   const currentNote = selectedEntry?.note ?? '';
+  const [isSaving, setIsSaving] = useState(false);
 
   return (
     <div
@@ -104,13 +109,29 @@ export function DayEditModal({
           />
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={onDelete}
             className="text-xs text-rose-500 hover:text-rose-600 transition"
           >
             删除记录
+          </button>
+          <button
+            type="button"
+            disabled={saveDisabled || isSaving}
+            onClick={async () => {
+              if (isSaving || saveDisabled) return;
+              setIsSaving(true);
+              try {
+                await onSave();
+              } finally {
+                setIsSaving(false);
+              }
+            }}
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:bg-zinc-100 disabled:text-zinc-400"
+          >
+            {isSaving ? '保存中…' : '保存'}
           </button>
         </div>
       </div>

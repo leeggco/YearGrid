@@ -94,8 +94,18 @@ export default function YearGrid({
     dismissGuide,
     startNewRange,
     updateEntry,
-    deleteEntry
+    deleteEntry,
+    syncStatus,
+    isDirty,
+    isAuthenticated,
+    saveChanges
   } = useYearGrid({ initialNowISO });
+
+  const visibleRanges = useMemo(() => ranges.filter((r) => !r.deletedAtISO), [ranges]);
+  const visibleActiveRange = useMemo(() => {
+    if (!activeRangeId) return null;
+    return visibleRanges.find((r) => r.id === activeRangeId) ?? null;
+  }, [activeRangeId, visibleRanges]);
 
   const { now, percent, remaining, days, rangeStart, rangeEnd } = useYearProgress(
     holidays,
@@ -289,7 +299,7 @@ export default function YearGrid({
   }, [viewMode]);
 
   const handleSelectRange = useCallback((id: string) => {
-    const r = ranges.find((item) => item.id === id);
+    const r = visibleRanges.find((item) => item.id === id);
     if (!r) return;
     setActiveRangeId(r.id);
     setCustomStartISO(r.startISO);
@@ -305,7 +315,7 @@ export default function YearGrid({
     setIsEditingRange(false);
     setIsRangeNavOpen(false);
   }, [
-    ranges,
+    visibleRanges,
     setActiveRangeId,
     setCustomEndISO,
     setCustomStartISO,
@@ -377,12 +387,16 @@ export default function YearGrid({
   ]);
 
   const handleDeleteRange = useCallback((id: string) => {
-    const index = ranges.findIndex(r => r.id === id);
+    const index = visibleRanges.findIndex(r => r.id === id);
     if (index < 0) return;
-    const nextRanges = ranges.filter(r => r.id !== id);
+    const deletedAtISO = new Date().toISOString();
+    const nextRanges = ranges.map((r) =>
+      r.id === id ? { ...r, deletedAtISO, updatedAtISO: deletedAtISO } : r
+    );
+    const nextVisible = nextRanges.filter((r) => !r.deletedAtISO);
     setRanges(nextRanges);
     if (activeRangeId === id) {
-      const nextActive = nextRanges[Math.min(index, nextRanges.length - 1)] ?? null;
+      const nextActive = nextVisible[Math.min(index, nextVisible.length - 1)] ?? null;
       setActiveRangeId(nextActive?.id ?? null);
       if (nextActive) {
         setCustomStartISO(nextActive.startISO);
@@ -392,6 +406,7 @@ export default function YearGrid({
   }, [
     activeRangeId,
     ranges,
+    visibleRanges,
     setActiveRangeId,
     setCustomEndISO,
     setCustomStartISO,
@@ -399,18 +414,18 @@ export default function YearGrid({
   ]);
 
   const handleDuplicateRange = useCallback((id: string) => {
-    const r = ranges.find(item => item.id === id);
+    const r = visibleRanges.find(item => item.id === id);
     if (!r) return;
     const newId = `range_${Date.now()}`;
     const desired = `${r.name} 副本`;
-    const name = makeUniqueRangeName(desired, ranges);
-    const next = { ...r, id: newId, name };
+    const name = makeUniqueRangeName(desired, visibleRanges);
+    const next = { ...r, id: newId, name, updatedAtISO: new Date().toISOString(), deletedAtISO: undefined };
     setRanges((prev) => [...prev, next]);
     setActiveRangeId(newId);
     setCustomStartISO(next.startISO);
     setCustomEndISO(next.endISO);
   }, [
-    ranges,
+    visibleRanges,
     setActiveRangeId,
     setCustomEndISO,
     setCustomStartISO,
@@ -462,9 +477,8 @@ export default function YearGrid({
   const handleUpdateEntry = useCallback(
     (isoDate: string, state: BodyState, note: string) => {
       updateEntry(isoDate, state, note);
-      flashSaved(isoDate);
     },
-    [flashSaved, updateEntry]
+    [updateEntry]
   );
 
   const handleDeleteEntryWithUndo = useCallback(
@@ -488,12 +502,11 @@ export default function YearGrid({
       const next = ((current + 1) % 6) as BodyState;
       if (next === 0) {
         deleteEntry(isoDate);
-        flashSaved(isoDate);
         return;
       }
       handleUpdateEntry(isoDate, next, entries[isoDate]?.note ?? '');
     },
-    [deleteEntry, entries, flashSaved, handleUpdateEntry]
+    [deleteEntry, entries, handleUpdateEntry]
   );
 
   const handleCellClickWithQuickRecord = useCallback(
@@ -544,12 +557,13 @@ export default function YearGrid({
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             now={now}
+            onSave={saveChanges}
             cellClickPreference={cellClickPreference}
             setCellClickPreference={setCellClickPreference}
-            ranges={ranges}
+            ranges={visibleRanges}
             activeRangeId={activeRangeId}
             setActiveRangeId={setActiveRangeId}
-            activeRange={activeRange}
+            activeRange={visibleActiveRange}
             isEditingRange={isEditingRange}
             setIsEditingRange={setIsEditingRange}
             isRangeEditing={isRangeEditing}
@@ -593,7 +607,7 @@ export default function YearGrid({
 
       {/* 主内容区域：承载不同视图（年 / 月 / 周 / 区间）的网格 */}
       <div className="w-full pb-12">
-        {viewMode === 'range' && ranges.length === 0 && !isEditingRange ? (
+        {viewMode === 'range' && visibleRanges.length === 0 && !isEditingRange ? (
           <RangeEmptyState onStartNewRange={startNewRange} />
         ) : (
           /* 重点卡片：标题 + 网格（年视图为 12 个月块；其他视图为连续日网格） */
@@ -604,7 +618,7 @@ export default function YearGrid({
                   <RangeNav
                     variant="sidebar"
                     now={now}
-                    ranges={ranges}
+                    ranges={visibleRanges}
                     activeRangeId={activeRangeId}
                     onSelect={handleSelectRange}
                     onAdd={handleAddRange}
@@ -673,7 +687,7 @@ export default function YearGrid({
                   now={now}
                   open={isRangeNavOpen}
                   onOpenChange={setIsRangeNavOpen}
-                  ranges={ranges}
+                  ranges={visibleRanges}
                   activeRangeId={activeRangeId}
                   onSelect={handleSelectRange}
                   onAdd={handleAddRange}
@@ -687,7 +701,7 @@ export default function YearGrid({
               <>
                 <GridHeader
                   viewMode={viewMode}
-                  activeRange={activeRange}
+                  activeRange={visibleActiveRange}
                   rangeStart={rangeStart}
                   now={now}
                   isEditingRange={isEditingRange}
@@ -769,6 +783,12 @@ export default function YearGrid({
           onClose={() => setSelectedISODate(null)}
           activeStateButtonClass={activeStateButtonClass}
           justSaved={justSavedISO === selectedDay.isoDate}
+          saveDisabled={!isAuthenticated || syncStatus === 'syncing' || !isDirty}
+          onSave={async () => {
+            const ok = await saveChanges();
+            if (ok) flashSaved(selectedDay.isoDate);
+            return ok;
+          }}
           onStateChange={(state) => {
             handleUpdateEntry(selectedDay.isoDate, state, selectedEntry?.note ?? '');
           }}

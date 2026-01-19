@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabaseClient';
 
 type AuthMode = 'login' | 'register' | 'forgot';
 
@@ -19,7 +20,19 @@ function inputClassName(disabled?: boolean) {
     .join(' ');
 }
 
-function TopNavBar({ onLogin, onRegister }: { onLogin: () => void; onRegister: () => void }) {
+function TopNavBar({
+  isSignedIn,
+  userLabel,
+  onLogin,
+  onRegister,
+  onLogout
+}: {
+  isSignedIn: boolean;
+  userLabel: string | null;
+  onLogin: () => void;
+  onRegister: () => void;
+  onLogout: () => void;
+}) {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-zinc-200/60 bg-white/80 backdrop-blur-md">
       <div className="app-container flex h-16 items-center justify-between">
@@ -42,23 +55,42 @@ function TopNavBar({ onLogin, onRegister }: { onLogin: () => void; onRegister: (
           >
             复盘
           </Link>
-          <button
-            type="button"
-            className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900 transition-colors hover:bg-zinc-100/70"
-            onClick={onLogin}
-          >
-            登录
-          </button>
-          <button
-            type="button"
-            className="rounded-lg px-4 py-2 text-sm text-white transition-colors"
-            style={{
-              background: 'linear-gradient(135deg, rgb(5 150 105), rgb(14 116 144))'
-            }}
-            onClick={onRegister}
-          >
-            注册
-          </button>
+          {isSignedIn ? (
+            <>
+              {userLabel ? (
+                <span className="hidden max-w-[220px] truncate text-sm text-zinc-600 md:inline">
+                  {userLabel}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900 transition-colors hover:bg-zinc-100/70"
+                onClick={onLogout}
+              >
+                退出
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-900 transition-colors hover:bg-zinc-100/70"
+                onClick={onLogin}
+              >
+                登录
+              </button>
+              <button
+                type="button"
+                className="rounded-lg px-4 py-2 text-sm text-white transition-colors"
+                style={{
+                  background: 'linear-gradient(135deg, rgb(5 150 105), rgb(14 116 144))'
+                }}
+                onClick={onRegister}
+              >
+                注册
+              </button>
+            </>
+          )}
         </div>
       </div>
     </header>
@@ -139,7 +171,7 @@ function AuthModal({
               {authMode === 'login'
                 ? '使用邮箱与密码登录'
                 : authMode === 'register'
-                  ? '创建账号后可在多设备同步（后续接入）'
+                  ? '创建账号后可在多设备同步'
                   : '输入邮箱以接收重置密码邮件'}
             </div>
           </div>
@@ -344,10 +376,43 @@ export default function TopNav() {
 
   const [forgotEmail, setForgotEmail] = useState('');
 
+  const [userLabel, setUserLabel] = useState<string | null>(null);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+
   const titleId = useId();
   const descriptionId = useId();
 
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    let canceled = false;
+    supabase.auth.getSession().then(({ data }) => {
+      if (canceled) return;
+      const next = data.session?.user ?? null;
+      setIsSignedIn(!!next);
+      setUserLabel(next?.email ?? null);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      const next = session?.user ?? null;
+      setIsSignedIn(!!next);
+      setUserLabel(next?.email ?? null);
+    });
+
+    return () => {
+      canceled = true;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
   const openAuth = (mode: AuthMode) => {
+    if (!isSupabaseConfigured()) {
+      lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setAuthMode(mode);
+      setMessage({ kind: 'error', text: '未配置 Supabase 环境变量，无法登录/注册。' });
+      return;
+    }
     lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setMessage(null);
     setAuthMode(mode);
@@ -396,9 +461,15 @@ export default function TopNav() {
     return '';
   }, [authMode]);
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setMessage({ kind: 'error', text: '未配置 Supabase 环境变量，无法登录/注册。' });
+      return;
+    }
 
     if (authMode === 'login') {
       const email = loginEmail.trim();
@@ -410,7 +481,15 @@ export default function TopNav() {
         setMessage({ kind: 'error', text: '邮箱格式不正确。' });
         return;
       }
-      setMessage({ kind: 'ok', text: '登录请求已提交（UI 演示）。' });
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPassword
+      });
+      if (error) {
+        setMessage({ kind: 'error', text: error.message });
+        return;
+      }
+      closeAuth();
       return;
     }
 
@@ -433,7 +512,18 @@ export default function TopNav() {
         setMessage({ kind: 'error', text: '密码至少 6 位。' });
         return;
       }
-      setMessage({ kind: 'ok', text: '注册请求已提交（UI 演示）。' });
+      const { error } = await supabase.auth.signUp({
+        email,
+        password: registerPassword,
+        options: {
+          data: { nickname }
+        }
+      });
+      if (error) {
+        setMessage({ kind: 'error', text: error.message });
+        return;
+      }
+      setMessage({ kind: 'ok', text: '注册成功，请检查邮箱完成验证后登录。' });
       return;
     }
 
@@ -447,13 +537,39 @@ export default function TopNav() {
         setMessage({ kind: 'error', text: '邮箱格式不正确。' });
         return;
       }
-      setMessage({ kind: 'ok', text: '已发送重置邮件（UI 演示）。' });
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin
+      });
+      if (error) {
+        setMessage({ kind: 'error', text: error.message });
+        return;
+      }
+      setMessage({ kind: 'ok', text: '已发送重置邮件，请检查邮箱。' });
     }
   };
 
   return (
     <>
-      <TopNavBar onLogin={() => openAuth('login')} onRegister={() => openAuth('register')} />
+      <TopNavBar
+        isSignedIn={isSignedIn}
+        userLabel={userLabel}
+        onLogin={() => openAuth('login')}
+        onRegister={() => openAuth('register')}
+        onLogout={async () => {
+          const supabase = getSupabaseClient();
+          if (!supabase) {
+            setMessage({ kind: 'error', text: '未配置 Supabase 环境变量，无法退出登录。' });
+            setAuthMode('login');
+            return;
+          }
+          const { error } = await supabase.auth.signOut();
+          if (error) {
+            setMessage({ kind: 'error', text: error.message });
+            setAuthMode('login');
+            return;
+          }
+        }}
+      />
 
       {authMode ? (
         <AuthModal

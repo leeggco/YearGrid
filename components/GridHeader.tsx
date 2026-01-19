@@ -36,18 +36,9 @@ export function GridHeader({
 
   useEffect(() => {
     if (viewMode !== 'range') return;
-    try {
-      const seen = localStorage.getItem('yeargrid_range_hint_seen_v1') === '1';
-      if (seen) return;
-      localStorage.setItem('yeargrid_range_hint_seen_v1', '1');
-      setShowRangeHint(true);
-      const id = window.setTimeout(() => setShowRangeHint(false), 8000);
-      return () => window.clearTimeout(id);
-    } catch {
-      setShowRangeHint(true);
-      const id = window.setTimeout(() => setShowRangeHint(false), 8000);
-      return () => window.clearTimeout(id);
-    }
+    setShowRangeHint(true);
+    const id = window.setTimeout(() => setShowRangeHint(false), 8000);
+    return () => window.clearTimeout(id);
   }, [viewMode]);
 
   if (viewMode === 'range' && activeRange && !isEditingRange) {

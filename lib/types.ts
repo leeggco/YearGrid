@@ -23,6 +23,8 @@ export type SavedRange = {
   endISO: string;
   color?: ThemeColor;
   entries?: Record<string, Entry>;
+  updatedAtISO?: string;
+  deletedAtISO?: string;
   goal?: string;
   milestones?: RangeMilestone[];
   isCompleted?: boolean;

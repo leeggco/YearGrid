@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
     "chinese-days": "^1.5.4",
     "date-fns": "^4.1.0",
     "framer-motion": "^11.0.0",

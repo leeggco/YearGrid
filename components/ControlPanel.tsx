@@ -21,6 +21,7 @@ interface ControlPanelProps {
   rangeStart: Date;
   rangeEnd: Date;
   now: Date;
+  onSave: () => Promise<boolean>;
 
   cellClickPreference: CellClickPreference;
   setCellClickPreference: (v: CellClickPreference) => void;
@@ -78,6 +79,7 @@ export function ControlPanel({
   rangeStart,
   rangeEnd,
   now,
+  onSave,
 
   cellClickPreference,
   setCellClickPreference,
@@ -437,10 +439,11 @@ export function ControlPanel({
                     type="button"
                     disabled={!rangeDraftValid || rangeDraftSaving}
                     className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-6 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:bg-zinc-100 disabled:text-zinc-400"
-                    onClick={() => {
+                    onClick={async () => {
                       if (rangeDraftSaving) return;
                       setRangeDraftSaving(true);
                       applyRangeDraftToActive();
+                      await onSave();
                       setIsEditingRange(false);
                     }}
                     title="保存"

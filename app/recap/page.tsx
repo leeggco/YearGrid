@@ -4,26 +4,11 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { format, startOfDay, subDays } from 'date-fns';
 import { BODY_STATE_META } from '@/lib/constants';
-import { normalizeRanges, normalizeViewPref } from '@/lib/normalization';
-import { safeParseJSON } from '@/lib/utils';
+import { getSupabaseClient } from '@/lib/supabaseClient';
 import type { Entry, SavedRange } from '@/lib/types';
 
 type WindowDays = 7 | 30;
 type NoteItem = { isoDate: string; note: string; state: Entry['state'] };
-
-function getEntriesFromStorage() {
-  const rawRanges = localStorage.getItem('yeargrid_ranges_v1');
-  const rawPref = localStorage.getItem('yeargrid_view_pref_v1');
-
-  const ranges = normalizeRanges(safeParseJSON(rawRanges)) ?? [];
-  const pref = normalizeViewPref(safeParseJSON(rawPref));
-
-  const activeRangeId = pref?.activeRangeId ?? (ranges[0]?.id ?? null);
-  const activeRange = activeRangeId ? ranges.find((r) => r.id === activeRangeId) ?? null : null;
-  const entries = activeRange?.entries ?? {};
-
-  return { ranges, activeRangeId, activeRange, entries };
-}
 
 function computeWindowEntries(now: Date, windowDays: WindowDays, entries: Record<string, Entry>) {
   const today = startOfDay(now);
@@ -42,10 +27,104 @@ export default function RecapPage() {
   const [rows, setRows] = useState<Array<{ isoDate: string; entry: Entry | null }>>([]);
 
   useEffect(() => {
+    const supabase = getSupabaseClient();
     const now = new Date();
-    const { activeRange, entries } = getEntriesFromStorage();
-    setActiveRange(activeRange);
-    setRows(computeWindowEntries(now, windowDays, entries));
+    if (!supabase) {
+      setActiveRange(null);
+      setRows(computeWindowEntries(now, windowDays, {}));
+      return;
+    }
+
+    let canceled = false;
+    (async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData.session?.user?.id ?? null;
+      if (!userId) {
+        if (canceled) return;
+        setActiveRange(null);
+        setRows(computeWindowEntries(now, windowDays, {}));
+        return;
+      }
+
+      const [{ data: rangesRows, error: rangesError }, { data: prefRow, error: prefError }] = await Promise.all([
+        supabase
+          .from('yeargrid_ranges')
+          .select('range_id,name,start_iso,end_iso,color,goal,milestones,is_completed,completed_at,updated_at,deleted_at')
+          .eq('user_id', userId),
+        supabase
+          .from('yeargrid_prefs')
+          .select('active_range_id')
+          .eq('user_id', userId)
+          .maybeSingle()
+      ]);
+      const anyError = rangesError ?? prefError ?? null;
+      if (anyError) {
+        if (canceled) return;
+        setActiveRange(null);
+        setRows(computeWindowEntries(now, windowDays, {}));
+        return;
+      }
+
+      const ranges: SavedRange[] = (rangesRows ?? []).map((row) => ({
+        id: row.range_id as string,
+        name: (row.name as string) || '区间',
+        startISO: (row.start_iso as string) || '',
+        endISO: (row.end_iso as string) || '',
+        ...(row.color ? { color: row.color as SavedRange['color'] } : {}),
+        ...(typeof row.goal === 'string' && row.goal.trim() ? { goal: row.goal.trim() } : {}),
+        ...(Array.isArray(row.milestones) ? { milestones: row.milestones as SavedRange['milestones'] } : {}),
+        ...(typeof row.is_completed === 'boolean' ? { isCompleted: row.is_completed as boolean } : {}),
+        ...(typeof row.completed_at === 'string' ? { completedAtISO: row.completed_at as string } : {}),
+        ...(typeof row.updated_at === 'string' ? { updatedAtISO: row.updated_at as string } : {}),
+        ...(typeof row.deleted_at === 'string' ? { deletedAtISO: row.deleted_at as string } : {})
+      }));
+
+      const visibleRanges = ranges.filter((r) => !r.deletedAtISO);
+      const desiredId =
+        (typeof prefRow?.active_range_id === 'string' ? (prefRow.active_range_id as string) : null) ??
+        (visibleRanges[0]?.id ?? null);
+      const desiredActiveRange = desiredId ? visibleRanges.find((r) => r.id === desiredId) ?? null : null;
+
+      if (!desiredActiveRange) {
+        if (canceled) return;
+        setActiveRange(null);
+        setRows(computeWindowEntries(now, windowDays, {}));
+        return;
+      }
+
+      const { data: entryRows, error: entryError } = await supabase
+        .from('yeargrid_entries')
+        .select('iso_date,state,note,updated_at,deleted_at')
+        .eq('user_id', userId)
+        .eq('range_id', desiredActiveRange.id);
+      if (entryError) {
+        if (canceled) return;
+        setActiveRange(desiredActiveRange);
+        setRows(computeWindowEntries(now, windowDays, {}));
+        return;
+      }
+
+      const entries: Record<string, Entry> = {};
+      for (const row of entryRows ?? []) {
+        const isoDate = row.iso_date as string;
+        if (!isoDate) continue;
+        const deletedAtISO = typeof row.deleted_at === 'string' ? (row.deleted_at as string) : null;
+        if (deletedAtISO) continue;
+        entries[isoDate] = {
+          state: (row.state ?? 0) as Entry['state'],
+          note: typeof row.note === 'string' ? (row.note as string) : '',
+          ...(typeof row.updated_at === 'string' ? { updatedAtISO: row.updated_at as string } : {})
+        };
+      }
+
+      if (canceled) return;
+      setActiveRange(desiredActiveRange);
+      setRows(computeWindowEntries(now, windowDays, entries));
+    })();
+
+    return () => {
+      canceled = true;
+    };
   }, [windowDays]);
 
   const stats = useMemo(() => {

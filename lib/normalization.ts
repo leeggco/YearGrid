@@ -20,10 +20,15 @@ export function normalizeEntries(value: unknown) {
     if (!entry || typeof entry !== 'object') continue;
     const state = (entry as { state?: unknown }).state;
     const note = (entry as { note?: unknown }).note;
+    const updatedAtISO = (entry as { updatedAtISO?: unknown }).updatedAtISO;
     if (!isBodyState(state)) continue;
     const safeNote = typeof note === 'string' ? note : '';
     if (state === 0 && safeNote.trim() === '') continue;
-    next[isoDate] = { state, note: safeNote };
+    next[isoDate] = {
+      state,
+      note: safeNote,
+      ...(typeof updatedAtISO === 'string' ? { updatedAtISO } : {})
+    };
   }
   return next;
 }
@@ -39,6 +44,8 @@ export function normalizeRanges(value: unknown) {
     const endISO = (item as { endISO?: unknown }).endISO;
     const color = (item as { color?: unknown }).color;
     const entries = (item as { entries?: unknown }).entries;
+    const updatedAtISO = (item as { updatedAtISO?: unknown }).updatedAtISO;
+    const deletedAtISO = (item as { deletedAtISO?: unknown }).deletedAtISO;
     const goal = (item as { goal?: unknown }).goal;
     const milestones = (item as { milestones?: unknown }).milestones;
     const isCompleted = (item as { isCompleted?: unknown }).isCompleted;
@@ -80,6 +87,8 @@ export function normalizeRanges(value: unknown) {
       endISO,
       ...(safeColor ? { color: safeColor } : {}),
       ...(normalizedEntries ? { entries: normalizedEntries } : {}),
+      ...(typeof updatedAtISO === 'string' ? { updatedAtISO } : {}),
+      ...(typeof deletedAtISO === 'string' ? { deletedAtISO } : {}),
       ...(safeGoal ? { goal: safeGoal } : {}),
       ...(safeMilestones.length ? { milestones: safeMilestones } : {}),
       ...(safeIsCompleted !== undefined ? { isCompleted: safeIsCompleted } : {}),
@@ -116,6 +125,7 @@ export function normalizeViewPref(value: unknown) {
   const customEndISO = (value as { customEndISO?: unknown }).customEndISO;
   const activeRangeId = (value as { activeRangeId?: unknown }).activeRangeId;
   const cellClickPreference = (value as { cellClickPreference?: unknown }).cellClickPreference;
+  const updatedAtISO = (value as { updatedAtISO?: unknown }).updatedAtISO;
   const safeMode: ViewMode | null =
     mode === 'year' || mode === 'month' || mode === 'week' || mode === 'range' ? mode : null;
   const safeCellClickPreference: 'open' | 'quick_record' | null =
@@ -126,7 +136,8 @@ export function normalizeViewPref(value: unknown) {
     customStartISO: typeof customStartISO === 'string' ? customStartISO : null,
     customEndISO: typeof customEndISO === 'string' ? customEndISO : null,
     activeRangeId: typeof activeRangeId === 'string' ? activeRangeId : null,
-    cellClickPreference: safeCellClickPreference
+    cellClickPreference: safeCellClickPreference,
+    updatedAtISO: typeof updatedAtISO === 'string' ? updatedAtISO : null
   };
   if (
     !normalized.mode &&
@@ -134,7 +145,8 @@ export function normalizeViewPref(value: unknown) {
     !normalized.customStartISO &&
     !normalized.customEndISO &&
     !normalized.activeRangeId &&
-    !normalized.cellClickPreference
+    !normalized.cellClickPreference &&
+    !normalized.updatedAtISO
   ) {
     return null;
   }
