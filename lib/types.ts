@@ -2,8 +2,6 @@ export type ThemeColor = 'emerald' | 'blue' | 'rose' | 'amber' | 'violet' | 'cya
 
 export type BodyState = 0 | 1 | 2 | 3 | 4 | 5;
 
-export type CellClickPreference = 'open' | 'quick_record';
-
 export type Entry = {
   state: BodyState;
   note: string;

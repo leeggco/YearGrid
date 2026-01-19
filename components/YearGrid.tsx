@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   addDays,
@@ -12,7 +11,7 @@ import {
   startOfDay
 } from 'date-fns';
 
-import { BodyState, Entry } from '@/lib/types';
+import { BodyState } from '@/lib/types';
 import type { YearDay } from '@/hooks/useYearProgress';
 import { useClampedTooltip } from '@/hooks/useClampedTooltip';
 import { useResponsiveGridLayout } from '@/hooks/useResponsiveGridLayout';
@@ -48,14 +47,6 @@ export default function YearGrid({
 
   const [justSavedISO, setJustSavedISO] = useState<string | null>(null);
   const justSavedTimerRef = useRef<number | null>(null);
-  const [undoToast, setUndoToast] = useState<
-    | {
-        isoDate: string;
-        entry: Entry;
-      }
-    | null
-  >(null);
-  const undoToastTimerRef = useRef<number | null>(null);
 
   const {
     viewMode, setViewMode,
@@ -78,7 +69,6 @@ export default function YearGrid({
     highlightWeekends, setHighlightWeekends,
     highlightHolidays, setHighlightHolidays,
     guideDismissed,
-    cellClickPreference, setCellClickPreference,
     isEditingRange, setIsEditingRange,
     isRangeEditing, isCreatingRange,
     rangeDraftColor, setRangeDraftColor,
@@ -96,9 +86,9 @@ export default function YearGrid({
     updateEntry,
     deleteEntry,
     syncStatus,
-    isDirty,
     isAuthenticated,
-    saveChanges
+    saveRange,
+    saveEntry
   } = useYearGrid({ initialNowISO });
 
   const visibleRanges = useMemo(() => ranges.filter((r) => !r.deletedAtISO), [ranges]);
@@ -453,84 +443,19 @@ export default function YearGrid({
     }, 1200);
   }, []);
 
-  const showUndoDeleteToast = useCallback((isoDate: string, entry: Entry) => {
-    setUndoToast({ isoDate, entry });
-    if (undoToastTimerRef.current !== null) {
-      window.clearTimeout(undoToastTimerRef.current);
-    }
-    undoToastTimerRef.current = window.setTimeout(() => {
-      setUndoToast(null);
-    }, 5000);
-  }, []);
-
   useEffect(() => {
     return () => {
       if (justSavedTimerRef.current !== null) {
         window.clearTimeout(justSavedTimerRef.current);
       }
-      if (undoToastTimerRef.current !== null) {
-        window.clearTimeout(undoToastTimerRef.current);
-      }
     };
   }, []);
 
-  const handleUpdateEntry = useCallback(
-    (isoDate: string, state: BodyState, note: string) => {
-      updateEntry(isoDate, state, note);
+  const handleDeleteEntry = useCallback(
+    async (isoDate: string) => {
+      await deleteEntry(isoDate);
     },
-    [updateEntry]
-  );
-
-  const handleDeleteEntryWithUndo = useCallback(
-    (isoDate: string) => {
-      const entry = entries[isoDate] ?? null;
-      deleteEntry(isoDate);
-      if (entry) showUndoDeleteToast(isoDate, entry);
-    },
-    [deleteEntry, entries, showUndoDeleteToast]
-  );
-
-  const handleUndoDelete = useCallback(() => {
-    if (!undoToast) return;
-    handleUpdateEntry(undoToast.isoDate, undoToast.entry.state, undoToast.entry.note);
-    setUndoToast(null);
-  }, [handleUpdateEntry, undoToast]);
-
-  const cycleEntryState = useCallback(
-    (isoDate: string) => {
-      const current = (entries[isoDate]?.state ?? 0) as BodyState;
-      const next = ((current + 1) % 6) as BodyState;
-      if (next === 0) {
-        deleteEntry(isoDate);
-        return;
-      }
-      handleUpdateEntry(isoDate, next, entries[isoDate]?.note ?? '');
-    },
-    [deleteEntry, entries, handleUpdateEntry]
-  );
-
-  const handleCellClickWithQuickRecord = useCallback(
-    (day: YearDay, e: ReactMouseEvent<HTMLDivElement>) => {
-      if (cellClickPreference === 'quick_record') {
-        if (e.shiftKey) {
-          handleCellClick(day);
-          return;
-        }
-        if (viewMode === 'range' && isEditingRange) return;
-        setFocusedISODate(day.isoDate);
-        cycleEntryState(day.isoDate);
-        return;
-      }
-
-      if (e.shiftKey) {
-        if (viewMode === 'range' && isEditingRange) return;
-        setFocusedISODate(day.isoDate);
-        cycleEntryState(day.isoDate);
-        return;
-      }
-      handleCellClick(day);
-    },
-    [cellClickPreference, cycleEntryState, handleCellClick, isEditingRange, setFocusedISODate, viewMode]
+    [deleteEntry]
   );
 
   return (
@@ -557,12 +482,9 @@ export default function YearGrid({
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             now={now}
-            onSave={saveChanges}
-            cellClickPreference={cellClickPreference}
-            setCellClickPreference={setCellClickPreference}
+            onSave={saveRange}
             ranges={visibleRanges}
             activeRangeId={activeRangeId}
-            setActiveRangeId={setActiveRangeId}
             activeRange={visibleActiveRange}
             isEditingRange={isEditingRange}
             setIsEditingRange={setIsEditingRange}
@@ -675,7 +597,7 @@ export default function YearGrid({
                       onCellFocus={handleCellFocus}
                       onCellBlur={handleCellBlur}
                       onCellKeyDown={handleCellKeyDown}
-                      onCellClick={handleCellClickWithQuickRecord}
+                      onCellClick={handleCellClick}
                       onCellMouseDown={handleCellMouseDown}
                       onCellMouseUp={handleCellMouseUp}
                     />
@@ -737,7 +659,7 @@ export default function YearGrid({
                     onCellFocus={handleCellFocus}
                     onCellBlur={handleCellBlur}
                     onCellKeyDown={handleCellKeyDown}
-                    onCellClick={handleCellClickWithQuickRecord}
+                    onCellClick={handleCellClick}
                     onCellMouseDown={handleCellMouseDown}
                     onCellMouseUp={handleCellMouseUp}
                   />
@@ -747,24 +669,6 @@ export default function YearGrid({
           </div>
         )}
       </div>
-
-      {undoToast ? (
-        <div className="fixed bottom-4 right-4 z-50 max-w-[90vw]">
-          <div className="flex items-center gap-3 rounded-xl border border-zinc-200/70 bg-white/90 px-4 py-3 text-sm text-zinc-900 shadow-[0_18px_60px_rgba(0,0,0,0.14)] backdrop-blur-xl">
-            <div className="min-w-0">
-              <div className="font-medium">已删除记录</div>
-              <div className="mt-0.5 text-xs text-zinc-500 tabular-nums">{undoToast.isoDate}</div>
-            </div>
-            <button
-              type="button"
-              onClick={handleUndoDelete}
-              className="shrink-0 rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
-            >
-              撤销
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       {tooltip ? (
         <DayTooltip
@@ -783,20 +687,16 @@ export default function YearGrid({
           onClose={() => setSelectedISODate(null)}
           activeStateButtonClass={activeStateButtonClass}
           justSaved={justSavedISO === selectedDay.isoDate}
-          saveDisabled={!isAuthenticated || syncStatus === 'syncing' || !isDirty}
-          onSave={async () => {
-            const ok = await saveChanges();
+          saveDisabled={!isAuthenticated || syncStatus === 'syncing'}
+          onSave={async (state, note) => {
+            const updatedAtISO = new Date().toISOString();
+            updateEntry(selectedDay.isoDate, state, note);
+            const ok = await saveEntry(selectedDay.isoDate, { state, note, updatedAtISO });
             if (ok) flashSaved(selectedDay.isoDate);
             return ok;
           }}
-          onStateChange={(state) => {
-            handleUpdateEntry(selectedDay.isoDate, state, selectedEntry?.note ?? '');
-          }}
-          onNoteChange={(note) => {
-            handleUpdateEntry(selectedDay.isoDate, selectedEntry?.state ?? 0, note);
-          }}
           onDelete={() => {
-            handleDeleteEntryWithUndo(selectedDay.isoDate);
+            handleDeleteEntry(selectedDay.isoDate);
             setSelectedISODate(null);
           }}
         />

@@ -4,14 +4,12 @@ import { format, addMonths, addWeeks, parseISO } from 'date-fns';
 import { 
   ChevronLeft, 
   ChevronRight, 
-  Settings2, 
   Check, 
   X, 
-  Trash2, 
-  MousePointer2
+  Trash2
 } from 'lucide-react';
 import { ViewMode } from '@/hooks/useYearProgress';
-import { CellClickPreference, RangeMilestone, ThemeColor, CustomRange } from '@/lib/types';
+import { RangeMilestone, ThemeColor, CustomRange } from '@/lib/types';
 
 interface ControlPanelProps {
   viewMode: ViewMode;
@@ -21,15 +19,11 @@ interface ControlPanelProps {
   rangeStart: Date;
   rangeEnd: Date;
   now: Date;
-  onSave: () => Promise<boolean>;
-
-  cellClickPreference: CellClickPreference;
-  setCellClickPreference: (v: CellClickPreference) => void;
+  onSave: (range: CustomRange | null) => Promise<boolean>;
   
   // Range related
   ranges: CustomRange[];
   activeRangeId: string | null;
-  setActiveRangeId: (id: string | null) => void;
   activeRange: CustomRange | null;
   isEditingRange: boolean;
   setIsEditingRange: (v: boolean) => void;
@@ -58,7 +52,7 @@ interface ControlPanelProps {
   setTooltip: (v: null) => void;
   setSelectedISODate: (v: null) => void;
   deleteActiveRange: () => void;
-  applyRangeDraftToActive: () => void;
+  applyRangeDraftToActive: () => CustomRange | null;
   cancelCreateRange: () => void;
   
   // Custom range selection
@@ -80,13 +74,8 @@ export function ControlPanel({
   rangeEnd,
   now,
   onSave,
-
-  cellClickPreference,
-  setCellClickPreference,
-  
   ranges,
   activeRangeId,
-  setActiveRangeId,
   activeRange,
   isEditingRange,
   setIsEditingRange,
@@ -163,34 +152,6 @@ export function ControlPanel({
             </button>
           ))}
         </div>
-
-        <div className="flex items-center gap-1 rounded-lg border border-zinc-200/60 bg-white p-1 text-xs text-zinc-700 shadow-sm">
-          <button
-            type="button"
-            className={`flex items-center gap-1 rounded-md px-3 py-2 transition-all ${
-              cellClickPreference === 'open'
-                ? 'bg-zinc-900 text-white shadow-sm'
-                : 'text-zinc-500 hover:bg-zinc-100/80 hover:text-zinc-900'
-            }`}
-            onClick={() => setCellClickPreference('open')}
-            title="点击格子：打开编辑"
-          >
-            <MousePointer2 className="h-4 w-4" />
-            打开
-          </button>
-          <button
-            type="button"
-            className={`rounded-md px-3 py-2 transition-all ${
-              cellClickPreference === 'quick_record'
-                ? 'bg-zinc-900 text-white shadow-sm'
-                : 'text-zinc-500 hover:bg-zinc-100/80 hover:text-zinc-900'
-            }`}
-            onClick={() => setCellClickPreference('quick_record')}
-            title="点击格子：快速记录"
-          >
-            快记
-          </button>
-        </div>
       </div>
 
       <div className="flex items-center justify-end gap-4">
@@ -246,42 +207,14 @@ export function ControlPanel({
 
         {viewMode === 'range' && (ranges.length > 0 || isEditingRange) && (
           <div className="relative flex flex-col items-end gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => openRangeNav?.()}
-                className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-white pl-4 pr-3 py-2 text-sm font-medium text-zinc-900 shadow-sm transition-all hover:bg-zinc-50 active:scale-[0.98] lg:hidden"
-              >
-                <span className="truncate max-w-[120px]">我的篇章</span>
-                <ChevronRight className="h-4 w-4 text-zinc-400 rotate-90" />
-              </button>
-
-              <button
-                type="button"
-                disabled={!activeRangeId || isEditingRange}
-                className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition-all hover:bg-zinc-50 hover:text-zinc-900 disabled:bg-zinc-50 disabled:text-zinc-400"
-                onClick={() => {
-                  if (!activeRangeId) return;
-                  const r = ranges.find((item) => item.id === activeRangeId);
-                  if (!r) return;
-                  setActiveRangeId(r.id);
-                  setRangeDraftName(r.name);
-                  setRangeDraftStartISO(r.startISO);
-                  setRangeDraftEndISO(r.endISO);
-                  setRangeDraftColor(r.color || 'emerald');
-                  setRangeDraftGoal(r.goal || '');
-                  setRangeDraftMilestones(r.milestones || []);
-                  setRangeDraftIsCompleted(!!r.isCompleted);
-                  setRangeDraftCompletedAtISO(r.completedAtISO || null);
-                  setIsEditingRange(true);
-                  setRangeDraftSaving(false);
-                }}
-                title="编辑"
-              >
-                <Settings2 className="h-4 w-4" />
-                编辑
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => openRangeNav?.()}
+              className="flex items-center gap-2 rounded-lg border border-zinc-200/60 bg-white pl-4 pr-3 py-2 text-sm font-medium text-zinc-900 shadow-sm transition-all hover:bg-zinc-50 active:scale-[0.98] lg:hidden"
+            >
+              <span className="truncate max-w-[120px]">我的篇章</span>
+              <ChevronRight className="h-4 w-4 text-zinc-400 rotate-90" />
+            </button>
 
             {isEditingRange && (
               <div className="absolute top-full right-0 z-30 mt-2 flex w-[600px] max-w-[90vw] flex-col gap-4 rounded-xl border border-zinc-200/60 bg-white p-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
@@ -442,9 +375,13 @@ export function ControlPanel({
                     onClick={async () => {
                       if (rangeDraftSaving) return;
                       setRangeDraftSaving(true);
-                      applyRangeDraftToActive();
-                      await onSave();
-                      setIsEditingRange(false);
+                      try {
+                        const range = applyRangeDraftToActive();
+                        const ok = await onSave(range);
+                        if (ok) setIsEditingRange(false);
+                      } finally {
+                        setRangeDraftSaving(false);
+                      }
                     }}
                     title="保存"
                   >
@@ -477,7 +414,7 @@ export function ControlPanel({
                 {activeRangeId === null && rangeDraftStartISO === '' && rangeDraftEndISO === '' && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                     <div className="flex items-start gap-2">
-                      <MousePointer2 className="mt-0.5 h-4 w-4 text-amber-700" />
+                      <ChevronRight className="mt-0.5 h-4 w-4 text-amber-700" />
                       <div className="min-w-0">
                         <div className="text-xs font-medium text-amber-900">拖拽选择时间</div>
                         <div className="mt-0.5 text-[11px] leading-4 text-amber-900/80">

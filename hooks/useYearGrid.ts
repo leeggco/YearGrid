@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { format, startOfDay, parseISO, isAfter, isBefore, addDays } from 'date-fns';
 import { ViewMode } from './useYearProgress';
-import { BodyState, CellClickPreference, Entry, RangeMilestone } from '@/lib/types';
+import { BodyState, Entry, RangeMilestone } from '@/lib/types';
 import { SavedRange, ThemeColor } from '@/components/RangeSelector';
 import { makeUniqueRangeName } from '@/lib/utils';
 import { getSupabaseClient } from '@/lib/supabaseClient';
@@ -29,7 +29,6 @@ export function useYearGrid({}: UseYearGridOptions) {
   const [highlightWeekends, setHighlightWeekends] = useState(true);
   const [highlightHolidays, setHighlightHolidays] = useState(true);
   const [guideDismissed, setGuideDismissed] = useState(false);
-  const [cellClickPreference, setCellClickPreference] = useState<CellClickPreference>('open');
   const [viewPrefUpdatedAtISO, setViewPrefUpdatedAtISO] = useState<string | null>(null);
   const [isEditingRange, setIsEditingRange] = useState(false);
   const [rangeDraftColor, setRangeDraftColor] = useState<ThemeColor>('emerald');
@@ -177,8 +176,7 @@ export function useYearGrid({}: UseYearGridOptions) {
       anchorISO,
       customStartISO,
       customEndISO,
-      activeRangeId,
-      cellClickPreference
+      activeRangeId
     });
     if (!lastPrefSnapshotRef.current) {
       lastPrefSnapshotRef.current = snapshot;
@@ -195,7 +193,6 @@ export function useYearGrid({}: UseYearGridOptions) {
   }, [
     activeRangeId,
     anchorISO,
-    cellClickPreference,
     customEndISO,
     customStartISO,
     viewMode,
@@ -238,6 +235,148 @@ export function useYearGrid({}: UseYearGridOptions) {
     setSyncStatus('idle');
     setSyncError(null);
   }, [entryTombstones, viewPrefLoaded]);
+
+  const saveRangeToSupabase = useCallback(
+    async (range: SavedRange | null) => {
+      if (!range) return false;
+      if (!authUserId) return false;
+      if (syncStatus === 'syncing') return false;
+      if (initialSyncInFlightRef.current) return false;
+      const supabase = getSupabaseClient();
+      if (!supabase) return false;
+
+      setSyncStatus('syncing');
+      setSyncError(null);
+
+      const nowISO = new Date().toISOString();
+      const payload = {
+        user_id: authUserId,
+        range_id: range.id,
+        name: range.name,
+        start_iso: range.startISO,
+        end_iso: range.endISO,
+        color: range.color ?? null,
+        goal: (range as any).goal ?? null,
+        milestones: (range as any).milestones ?? null,
+        is_completed: (range as any).isCompleted ?? null,
+        completed_at: (range as any).completedAtISO ?? null,
+        updated_at: (range as any).updatedAtISO ?? nowISO,
+        deleted_at: (range as any).deletedAtISO ?? null
+      };
+
+      const { error } = await supabase.from('yeargrid_ranges').upsert(payload, {
+        onConflict: 'user_id,range_id'
+      });
+
+      if (error) {
+        setSyncStatus('error');
+        setSyncError(error.message);
+        return false;
+      }
+
+      setSyncStatus('ok');
+      setSyncError(null);
+      return true;
+    },
+    [authUserId, syncStatus]
+  );
+
+  const saveEntryToSupabase = useCallback(
+    async (isoDate: string, entry: Entry | null) => {
+      if (!authUserId) return false;
+      if (!activeRangeId) return false;
+      if (!entry) return false;
+      if (syncStatus === 'syncing') return false;
+      if (initialSyncInFlightRef.current) return false;
+      const supabase = getSupabaseClient();
+      if (!supabase) return false;
+
+      setSyncStatus('syncing');
+      setSyncError(null);
+
+      const nowISO = new Date().toISOString();
+      const payload = {
+        user_id: authUserId,
+        range_id: activeRangeId,
+        iso_date: isoDate,
+        state: entry.state,
+        note: entry.note,
+        updated_at: entry.updatedAtISO ?? nowISO,
+        deleted_at: null
+      };
+
+      const { error } = await supabase.from('yeargrid_entries').upsert(payload, {
+        onConflict: 'user_id,range_id,iso_date'
+      });
+
+      if (error) {
+        setSyncStatus('error');
+        setSyncError(error.message);
+        return false;
+      }
+
+      setSyncStatus('ok');
+      setSyncError(null);
+      return true;
+    },
+    [activeRangeId, authUserId, syncStatus]
+  );
+
+  const deleteEntryLocal = useCallback((isoDate: string) => {
+    if (activeRangeId) {
+      const key = `${activeRangeId}:${isoDate}`;
+      const deletedAtISO = new Date().toISOString();
+      setEntryTombstones((prev) => ({ ...prev, [key]: deletedAtISO }));
+    }
+    setEntries((prev) => {
+      const next = { ...prev };
+      delete next[isoDate];
+      return next;
+    });
+  }, [activeRangeId]);
+
+  const deleteEntryFromSupabase = useCallback(
+    async (isoDate: string) => {
+      if (!authUserId) return false;
+      if (!activeRangeId) return false;
+      if (syncStatus === 'syncing') return false;
+      if (initialSyncInFlightRef.current) return false;
+      const supabase = getSupabaseClient();
+      if (!supabase) return false;
+
+      // Update local state first
+      deleteEntryLocal(isoDate);
+
+      setSyncStatus('syncing');
+      setSyncError(null);
+
+      const nowISO = new Date().toISOString();
+      const payload = {
+        user_id: authUserId,
+        range_id: activeRangeId,
+        iso_date: isoDate,
+        state: 0,
+        note: '',
+        updated_at: nowISO,
+        deleted_at: nowISO
+      };
+
+      const { error } = await supabase.from('yeargrid_entries').upsert(payload, {
+        onConflict: 'user_id,range_id,iso_date'
+      });
+
+      if (error) {
+        setSyncStatus('error');
+        setSyncError(error.message);
+        return false;
+      }
+
+      setSyncStatus('ok');
+      setSyncError(null);
+      return true;
+    },
+    [activeRangeId, authUserId, syncStatus, deleteEntryLocal]
+  );
 
   const saveToSupabase = useCallback(async () => {
     if (!viewPrefLoaded || !rangesLoaded || !entriesLoaded) return false;
@@ -285,7 +424,6 @@ export function useYearGrid({}: UseYearGridOptions) {
       custom_start_iso: customStartISO || null,
       custom_end_iso: customEndISO || null,
       active_range_id: activeRangeId,
-      cell_click_preference: cellClickPreference,
       updated_at: viewPrefUpdatedAtISO ?? nowISO
     };
     const { error: prefError } = await supabase.from('yeargrid_prefs').upsert(prefPayload, {
@@ -360,7 +498,6 @@ export function useYearGrid({}: UseYearGridOptions) {
     activeRangeId,
     anchorISO,
     authUserId,
-    cellClickPreference,
     customEndISO,
     customStartISO,
     entries,
@@ -382,7 +519,6 @@ export function useYearGrid({}: UseYearGridOptions) {
       customStartISO: string | null;
       customEndISO: string | null;
       activeRangeId: string | null;
-      cellClickPreference: CellClickPreference;
       updatedAtISO: string | null;
     }>) => {
       isApplyingRemoteRef.current = true;
@@ -400,7 +536,6 @@ export function useYearGrid({}: UseYearGridOptions) {
         if (nextPref.anchorISO) setAnchorISO(nextPref.anchorISO);
         if (nextPref.customStartISO !== undefined) setCustomStartISO(nextPref.customStartISO ?? '');
         if (nextPref.customEndISO !== undefined) setCustomEndISO(nextPref.customEndISO ?? '');
-        if (nextPref.cellClickPreference) setCellClickPreference(nextPref.cellClickPreference);
         if (nextPref.updatedAtISO !== undefined) setViewPrefUpdatedAtISO(nextPref.updatedAtISO);
       }
 
@@ -451,7 +586,7 @@ export function useYearGrid({}: UseYearGridOptions) {
               .eq('user_id', userId),
             supabase
               .from('yeargrid_prefs')
-              .select('mode,anchor_iso,custom_start_iso,custom_end_iso,active_range_id,cell_click_preference,updated_at')
+              .select('mode,anchor_iso,custom_start_iso,custom_end_iso,active_range_id,updated_at')
               .eq('user_id', userId)
               .maybeSingle()
           ]);
@@ -538,10 +673,6 @@ export function useYearGrid({}: UseYearGridOptions) {
                 typeof remotePref.custom_end_iso === 'string' ? (remotePref.custom_end_iso as string) : null,
               activeRangeId:
                 typeof remotePref.active_range_id === 'string' ? (remotePref.active_range_id as string) : null,
-              cellClickPreference:
-                remotePref.cell_click_preference === 'open' || remotePref.cell_click_preference === 'quick_record'
-                  ? (remotePref.cell_click_preference as CellClickPreference)
-                  : undefined,
               updatedAtISO: typeof remotePref.updated_at === 'string' ? (remotePref.updated_at as string) : null
             }
           : undefined;
@@ -555,10 +686,11 @@ export function useYearGrid({}: UseYearGridOptions) {
 
   // Handlers
   const applyRangeDraftToActive = useCallback(() => {
-    if (!rangeDraftValid) return;
+    if (!rangeDraftValid) return null;
     setCustomStartISO(rangeDraftStartISO);
     setCustomEndISO(rangeDraftEndISO);
     const desiredName = rangeDraftName.trim() || '新篇章';
+    const uniqueName = makeUniqueRangeName(desiredName, ranges);
     const safeGoal = rangeDraftGoal.trim() || undefined;
     const safeMilestones = rangeDraftMilestones.filter((m) => m.text.trim()).slice(0, 20);
     const safeIsCompleted = rangeDraftIsCompleted ? true : undefined;
@@ -568,30 +700,28 @@ export function useYearGrid({}: UseYearGridOptions) {
 
     if (!activeRangeId) {
       const id = `range_${Date.now()}`;
+      const nextRange: SavedRange = {
+        id,
+        name: uniqueName,
+        startISO: rangeDraftStartISO,
+        endISO: rangeDraftEndISO,
+        color: rangeDraftColor,
+        updatedAtISO: new Date().toISOString(),
+        ...(safeGoal ? { goal: safeGoal } : {}),
+        ...(safeMilestones.length ? { milestones: safeMilestones } : {}),
+        ...(safeIsCompleted ? { isCompleted: safeIsCompleted } : {}),
+        ...(safeCompletedAtISO ? { completedAtISO: safeCompletedAtISO } : {})
+      } as any;
       setRanges((prev) => {
-        const name = makeUniqueRangeName(desiredName, prev);
-        return [
-          ...prev,
-          {
-            id,
-            name,
-            startISO: rangeDraftStartISO,
-            endISO: rangeDraftEndISO,
-            color: rangeDraftColor,
-            updatedAtISO: new Date().toISOString(),
-            ...(safeGoal ? { goal: safeGoal } : {}),
-            ...(safeMilestones.length ? { milestones: safeMilestones } : {}),
-            ...(safeIsCompleted ? { isCompleted: safeIsCompleted } : {}),
-            ...(safeCompletedAtISO ? { completedAtISO: safeCompletedAtISO } : {})
-          }
-        ];
+        return [...prev, nextRange];
       });
       setActiveRangeId(id);
-      return;
+      return nextRange;
     }
 
-    setRanges((prev) => prev.map((r) => r.id === activeRangeId ? {
-      ...r,
+    const existing = ranges.find((r) => r.id === activeRangeId) ?? null;
+    const nextRange: SavedRange = {
+      ...(existing ?? { id: activeRangeId, name: uniqueName, startISO: rangeDraftStartISO, endISO: rangeDraftEndISO, color: rangeDraftColor }),
       name: desiredName,
       startISO: rangeDraftStartISO,
       endISO: rangeDraftEndISO,
@@ -601,7 +731,10 @@ export function useYearGrid({}: UseYearGridOptions) {
       milestones: safeMilestones.length ? safeMilestones : undefined,
       isCompleted: safeIsCompleted,
       completedAtISO: safeCompletedAtISO
-    } : r));
+    } as any;
+
+    setRanges((prev) => prev.map((r) => (r.id === activeRangeId ? (nextRange as any) : r)));
+    return nextRange;
   }, [
     activeRangeId,
     rangeDraftColor,
@@ -612,7 +745,8 @@ export function useYearGrid({}: UseYearGridOptions) {
     rangeDraftMilestones,
     rangeDraftName,
     rangeDraftStartISO,
-    rangeDraftValid
+    rangeDraftValid,
+    ranges
   ]);
 
   const deleteActiveRange = useCallback(() => {
@@ -708,8 +842,7 @@ export function useYearGrid({}: UseYearGridOptions) {
     focusedISODate, setFocusedISODate,
     highlightWeekends, setHighlightWeekends,
     highlightHolidays, setHighlightHolidays,
-    guideDismissed, setGuideDismissed,
-    cellClickPreference, setCellClickPreference,
+    guideDismissed,
     isEditingRange, setIsEditingRange,
     isRangeEditing, isCreatingRange,
     rangeDraftColor, setRangeDraftColor,
@@ -731,6 +864,9 @@ export function useYearGrid({}: UseYearGridOptions) {
     isDirty,
     isAuthenticated: !!authUserId,
     saveChanges: saveToSupabase,
+    saveRange: saveRangeToSupabase,
+    saveEntry: saveEntryToSupabase,
+    deleteEntry: deleteEntryFromSupabase,
     dismissGuide: () => {
       setGuideDismissed(true);
     },
@@ -757,17 +893,6 @@ export function useYearGrid({}: UseYearGridOptions) {
         }
       }));
     },
-    deleteEntry: (isoDate: string) => {
-      if (activeRangeId) {
-        const key = `${activeRangeId}:${isoDate}`;
-        const deletedAtISO = new Date().toISOString();
-        setEntryTombstones((prev) => ({ ...prev, [key]: deletedAtISO }));
-      }
-      setEntries((prev) => {
-        const next = { ...prev };
-        delete next[isoDate];
-        return next;
-      });
-    }
+    deleteEntryLocal
   };
 }

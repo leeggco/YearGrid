@@ -1,6 +1,6 @@
 'use client';
 
-import { LegacyRef, useState } from 'react';
+import { LegacyRef, useEffect, useMemo, useState } from 'react';
 import { YearDay } from '@/hooks/useYearProgress';
 import { BodyState, Entry } from '@/lib/types';
 import { BODY_STATE_META, BODY_STATE_TEXT } from '@/lib/constants';
@@ -10,12 +10,10 @@ interface DayEditModalProps {
   selectedEntry: Entry | null;
   modalRef: LegacyRef<HTMLDivElement>;
   onClose: () => void;
-  onStateChange: (state: BodyState) => void;
-  onNoteChange: (note: string) => void;
   activeStateButtonClass: (state: BodyState) => string;
   onDelete: () => void;
   justSaved?: boolean;
-  onSave: () => Promise<boolean>;
+  onSave: (state: BodyState, note: string) => Promise<boolean>;
   saveDisabled: boolean;
 }
 
@@ -24,16 +22,26 @@ export function DayEditModal({
   selectedEntry,
   modalRef,
   onClose,
-  onStateChange,
-  onNoteChange,
   activeStateButtonClass,
   onDelete,
   justSaved,
   onSave,
   saveDisabled
 }: DayEditModalProps) {
-  const currentNote = selectedEntry?.note ?? '';
+  const [draftState, setDraftState] = useState<BodyState>((selectedEntry?.state ?? 0) as BodyState);
+  const [draftNote, setDraftNote] = useState(selectedEntry?.note ?? '');
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setDraftState((selectedEntry?.state ?? 0) as BodyState);
+    setDraftNote(selectedEntry?.note ?? '');
+  }, [selectedDay.isoDate, selectedEntry?.note, selectedEntry?.state]);
+
+  const isDraftDirty = useMemo(() => {
+    const baseState = (selectedEntry?.state ?? 0) as BodyState;
+    const baseNote = selectedEntry?.note ?? '';
+    return draftState !== baseState || draftNote !== baseNote;
+  }, [draftNote, draftState, selectedEntry?.note, selectedEntry?.state]);
 
   return (
     <div
@@ -62,7 +70,7 @@ export function DayEditModal({
               {selectedDay.holiday ? `节日：${selectedDay.holiday}` : ' '}
             </div>
             <div className="mt-1 text-xs text-zinc-600">
-              体感：{BODY_STATE_TEXT[(selectedEntry?.state ?? 0) as BodyState]}
+              体感：{BODY_STATE_TEXT[draftState]}
             </div>
           </div>
           <div className="min-h-[18px] text-xs font-medium text-emerald-600">
@@ -91,7 +99,7 @@ export function DayEditModal({
                     ? activeStateButtonClass(item.state)
                     : 'border-zinc-200 bg-white/60 text-zinc-700 hover:bg-white'
                 }`}
-                onClick={() => onStateChange(item.state)}
+                onClick={() => setDraftState(item.state)}
               >
                 {item.label}
               </button>
@@ -102,8 +110,8 @@ export function DayEditModal({
         <div className="mt-4">
           <textarea
             placeholder="写点什么（可选）..."
-            value={currentNote}
-            onChange={(e) => onNoteChange(e.target.value)}
+            value={draftNote}
+            onChange={(e) => setDraftNote(e.target.value)}
             rows={4}
             className="w-full resize-none rounded-xl border border-zinc-200/60 bg-white/50 px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 outline-none ring-zinc-900/5 transition focus:border-zinc-900/20 focus:bg-white focus:ring-4"
           />
@@ -117,22 +125,31 @@ export function DayEditModal({
           >
             删除记录
           </button>
-          <button
-            type="button"
-            disabled={saveDisabled || isSaving}
-            onClick={async () => {
-              if (isSaving || saveDisabled) return;
-              setIsSaving(true);
-              try {
-                await onSave();
-              } finally {
-                setIsSaving(false);
-              }
-            }}
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:bg-zinc-100 disabled:text-zinc-400"
-          >
-            {isSaving ? '保存中…' : '保存'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={saveDisabled || isSaving || !isDraftDirty}
+              onClick={async () => {
+                if (isSaving || saveDisabled || !isDraftDirty) return;
+                setIsSaving(true);
+                try {
+                  await onSave(draftState, draftNote);
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:bg-zinc-100 disabled:text-zinc-400"
+            >
+              {isSaving ? '保存中…' : '保存'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

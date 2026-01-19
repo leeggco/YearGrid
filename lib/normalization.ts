@@ -124,19 +124,15 @@ export function normalizeViewPref(value: unknown) {
   const customStartISO = (value as { customStartISO?: unknown }).customStartISO;
   const customEndISO = (value as { customEndISO?: unknown }).customEndISO;
   const activeRangeId = (value as { activeRangeId?: unknown }).activeRangeId;
-  const cellClickPreference = (value as { cellClickPreference?: unknown }).cellClickPreference;
   const updatedAtISO = (value as { updatedAtISO?: unknown }).updatedAtISO;
   const safeMode: ViewMode | null =
     mode === 'year' || mode === 'month' || mode === 'week' || mode === 'range' ? mode : null;
-  const safeCellClickPreference: 'open' | 'quick_record' | null =
-    cellClickPreference === 'open' || cellClickPreference === 'quick_record' ? cellClickPreference : null;
   const normalized = {
     mode: safeMode,
     anchorISO: typeof anchorISO === 'string' ? anchorISO : null,
     customStartISO: typeof customStartISO === 'string' ? customStartISO : null,
     customEndISO: typeof customEndISO === 'string' ? customEndISO : null,
     activeRangeId: typeof activeRangeId === 'string' ? activeRangeId : null,
-    cellClickPreference: safeCellClickPreference,
     updatedAtISO: typeof updatedAtISO === 'string' ? updatedAtISO : null
   };
   if (
@@ -145,7 +141,6 @@ export function normalizeViewPref(value: unknown) {
     !normalized.customStartISO &&
     !normalized.customEndISO &&
     !normalized.activeRangeId &&
-    !normalized.cellClickPreference &&
     !normalized.updatedAtISO
   ) {
     return null;
